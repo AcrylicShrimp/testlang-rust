@@ -1,0 +1,125 @@
+
+__root: @module;
+
+module: @statement-list;
+
+statement-list: @statement;
+statement-list: @statement-list @statement;
+
+statement: @scope-statement;
+statement: @if-statement;
+statement: @for-statement;
+statement: @with-statement;
+statement: @ret-statement Semicolon;
+statement: @let-statement Semicolon;
+statement: @expression Semicolon;
+
+scope-statement: BraceL BraceR;
+scope-statement: BraceL @statement-list BraceR;
+
+if-statement: KeywordIf @expression @scope-statement;
+if-statement: KeywordIf @expression @scope-statement KeywordElse @scope-statement;
+if-statement: KeywordIf @expression @scope-statement KeywordElse @if-statement;
+
+for-statement: KeywordFor @scope-statement;
+for-statement: KeywordFor @expression @scope-statement;
+for-statement: KeywordFor @for-statement-id-list KeywordIn @expression @scope-statement;
+
+for-statement-id-list: Id;
+for-statement-id-list: @for-statement-id-list Comma Id;
+
+with-statement: KeywordWith @with-statement-id-list @scope-statement;
+
+with-statement-id-list: Id OpAssign @expression;
+with-statement-id-list: @with-statement-id-list Comma Id OpAssign @expression;
+
+ret-statement: KeywordRet;
+ret-statement: KeywordRet @expression;
+
+let-statement: KeywordLet Id OpAssign @expression;
+let-statement: KeywordLet Id @type OpAssign @expression;
+
+type: TypeIdInt;
+type: TypeIdInt;
+
+expression: @assignment;
+
+assignment: @op-or;
+assignment: @left-value OpAssign @assignment;
+assignment: @left-value OpAssignAdd @assignment;
+assignment: @left-value OpAssignSub @assignment;
+assignment: @left-value OpAssignMul @assignment;
+assignment: @left-value OpAssignDiv @assignment;
+assignment: @left-value OpAssignPow @assignment;
+assignment: @left-value OpAssignBitOr @assignment;
+assignment: @left-value OpAssignBitAnd @assignment;
+assignment: @left-value OpAssignBitXor @assignment;
+assignment: @left-value OpAssignBitNot @assignment;
+assignment: @left-value OpAssignShiftL @assignment;
+assignment: @left-value OpAssignShiftR @assignment;
+
+op-or: @op-and;
+op-or: @op-or OpOr @op-and;
+
+op-and: @op-not;
+op-and: @op-and OpAnd @op-not;
+
+op-not: @op-comp;
+op-not: OpNot @op-not;
+
+op-comp: @op-addsub;
+op-comp: @op-comp OpEq @op-addsub;
+op-comp: @op-comp OpNeq @op-addsub;
+op-comp: @op-comp OpLs @op-addsub;
+op-comp: @op-comp OpLsEq @op-addsub;
+op-comp: @op-comp OpGt @op-addsub;
+op-comp: @op-comp OpGtEq @op-addsub;
+
+op-addsub: @op-muldivmod;
+op-addsub: @op-addsub OpAdd @op-muldivmod;
+op-addsub: @op-addsub OpSub @op-muldivmod;
+
+op-muldivmod: @op-pow;
+op-muldivmod: @op-muldivmod OpMul @op-pow;
+op-muldivmod: @op-muldivmod OpDiv @op-pow;
+op-muldivmod: @op-muldivmod OpMod @op-pow;
+
+op-pow: @op-shift;
+op-pow: @op-shift OpPow @op-pow;
+
+op-shift: @op-bit-or;
+op-shift: @op-shift OpShiftL @op-bit-or;
+op-shift: @op-shift OpShiftR @op-bit-or;
+
+op-bit-or: @op-bit-and;
+op-bit-or: @op-bit-or OpBitOr @op-bit-and;
+
+op-bit-and: @op-bit-xor;
+op-bit-and: @op-bit-and OpBitAnd @op-bit-xor;
+
+op-bit-xor: @op-bit-not;
+op-bit-xor: @op-bit-and OpBitXor @op-bit-not;
+
+op-bit-not: @op-single;
+op-bit-not: OpBitNot @op-single;
+
+op-single: KeywordFrom @scope-statement;
+op-single: ParenL @expression ParenR;
+op-single: OpAdd @op-single;
+op-single: OpSub @op-single;
+op-single: @function-call;
+op-single: @left-value;
+op-single: @literal;
+
+function-call: Id ParenL ParenR;
+function-call: Id ParenL @function-call-argument-list ParenR;
+
+function-call-argument-list: @expression;
+function-call-argument-list: @function-call-argument-list Comma @expression;
+
+left-value: Id;
+
+literal: LiteralBool;
+literal: LiteralInteger;
+literal: LiteralDecimal;
+literal: LiteralString;

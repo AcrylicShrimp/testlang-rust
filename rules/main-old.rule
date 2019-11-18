@@ -1,0 +1,115 @@
+
+__root: @module;
+
+module: @statement-list;
+
+statement-list: @statement;
+statement-list: @statement-list @statement;
+
+statement: @statement-if;
+statement: @statement-for;
+statement: @statement-return semicolon;
+statement: @statement-declare-var semicolon;
+statement: @expression semicolon;
+
+repeat-statement: @statement;
+repeat-statement: @repeat-statement @statement;
+
+end-statement: colon @statement;
+end-statement: @statement-bracket;
+
+statement-bracket: brace_l brace_r;
+statement-bracket: brace_l @repeat-statement brace_r;
+
+statement-if: keyword_if @expression @end-statement;
+statement-if: keyword_if @expression @end-statement keyword_else @end-statement;
+statement-if: keyword_if @expression @end-statement keyword_else @statement-if;
+
+statement-for: keyword_for @end-statement;
+
+statement-return: keyword_ret;
+statement-return: keyword_ret @expression;
+
+statement-declare-var: keyword_let id;
+statement-declare-var: keyword_let id op_assign @expression;
+
+expression: @concat;
+
+concat: @assignment;
+concat: @concat comma @assignment;
+
+assignment: @op-or;
+assignment: @left-value op_assign @assignment;
+assignment: @left-value op_assign_add @assignment;
+assignment: @left-value op_assign_sub @assignment;
+assignment: @left-value op_assign_mul @assignment;
+assignment: @left-value op_assign_div @assignment;
+assignment: @left-value op_assign_pow @assignment;
+assignment: @left-value op_assign_bit_or @assignment;
+assignment: @left-value op_assign_bit_and @assignment;
+assignment: @left-value op_assign_bit_xor @assignment;
+assignment: @left-value op_assign_bit_not @assignment;
+assignment: @left-value op_assign_shift_l @assignment;
+assignment: @left-value op_assign_shift_r @assignment;
+
+op-or: @op-and;
+op-or: @op-or op_or @op-and;
+
+op-and: @op-not;
+op-and: @op-and op_and @op-not;
+
+op-not: @op-comp;
+op-not: op_not @op-not;
+
+op-comp: @op-bit-or;
+op-comp: @op-comp op_eq @op-bit-or;
+op-comp: @op-comp op_neq @op-bit-or;
+op-comp: @op-comp op_ls @op-bit-or;
+op-comp: @op-comp op_lseq @op-bit-or;
+
+op-bit-or: @op-bit-and;
+op-bit-or: @op-bit-or op_or @op-bit-and;
+
+op-bit-and: @op-bit-not;
+op-bit-and: @op-bit-and op_and @op-bit-not;
+
+op-bit-not: @op-shift;
+op-bit-not: op_not @op-shift;
+
+op-shift: @op-addsub;
+op-shift: @op-shift op_shift_l op-addsub;
+op-shift: @op-shift op_shift_r op-addsub;
+
+op-addsub: @op-muldivmod;
+op-addsub: @op-addsub op_add @op-muldivmod;
+op-addsub: @op-addsub op_sub @op-muldivmod;
+
+op-muldivmod: @op-pow;
+op-muldivmod: @op-muldivmod op_mul @op-pow;
+op-muldivmod: @op-muldivmod op_div @op-pow;
+op-muldivmod: @op-muldivmod op_mod @op-pow;
+
+op-pow: @op-single-front;
+op-pow: @op-single-front op_pow @op-pow;
+
+op-single-front: @op-single;
+op-single-front: op_inc @op-single-front;
+op-single-front: op_dec @op-single-front;
+
+op-single: paren_l @expression paren_r;
+op-single: @function-call;
+op-single: @left-value;
+op-single: @literal;
+
+function-call: id paren_l paren_r;
+function-call: id paren_l @function-call-argument paren_r;
+
+function-call-argument: @expression;
+function-call-argument: @function-call-argument comma @expression;
+
+left-value: id;
+
+literal: literal_bool;
+literal: literal_integer;
+literal: literal_decimal;
+literal: literal_string;
