@@ -88,19 +88,9 @@ impl<'a> InModuleGenerator<'a> {
 				.fn_type(function_parameter_type.as_slice(), false),
 		};
 
-		let function = self.module.add_function(name, function_type, None);
-		let function_basic_block = self
-			.generator
-			.context
-			.append_basic_block(&function, "entry");
-		let function_builder = self.generator.context.create_builder();
-
-		function_builder.position_at_end(&function_basic_block);
-
 		InFunctionGenerator {
 			name: name.to_owned(),
-			function: function,
-			builder: function_builder,
+			function: self.module.add_function(name, function_type, None),
 			in_module_generator: self,
 		}
 	}
@@ -114,7 +104,6 @@ impl<'a> InModuleGenerator<'a> {
 pub struct InFunctionGenerator<'a> {
 	pub name: String,
 	pub function: FunctionValue,
-	pub builder: Builder,
 	pub in_module_generator: &'a InModuleGenerator<'a>,
 }
 
@@ -191,7 +180,21 @@ impl<'a> InFunctionGenerator<'a> {
 				if ast.children.len() == 1 {
 					self.generate_expression_code(&ast.children[0])
 				} else {
-					self.generate_expression_code_assignment(ast)
+					self.generate_expression_code_op_or(ast)
+				}
+			}
+			"op-and" => {
+				if ast.children.len() == 1 {
+					self.generate_expression_code(&ast.children[0])
+				} else {
+					self.generate_expression_code_op_and(ast)
+				}
+			}
+			"op-not" => {
+				if ast.children.len() == 1 {
+					self.generate_expression_code(&ast.children[0])
+				} else {
+					self.generate_expression_code_op_not(ast)
 				}
 			}
 			_ => unreachable!(),
@@ -207,35 +210,122 @@ impl<'a> InFunctionGenerator<'a> {
 			panic!("op-or AST expected, got {}.", ast.name);
 		}
 
+		let mut lhs = self.generate_expression_code(&ast.children[0]);
 		let lhs_block = self.new_basic_block("OR lhs");
+
+		let mut rhs = self.generate_expression_code(&ast.children[2]);
 		let rhs_block = self.new_basic_block("OR rhs");
+
 		let end_block = self.new_basic_block("OR end");
 
-		let lhs = 
+		lhs = lhs_block.cast(lhs, ValueType::Bool);
+		rhs = rhs_block.cast(rhs, ValueType::Bool);
 
-		if let AnyValueEnum::IntValue(int_value) = self
-			.cast(
-				self.generate_expression_code(&ast.children[0]),
-				ValueType::Bool,
-			)
-			.llvm_value
-		{
-			lhs_block.builder.build_conditional_branch(
-				int_value,
-				&end_block.basic_block,
-				&rhs_block.basic_block,
-			);
-		} else {
-			unreachable!();
+		lhs_block.builder.build_conditional_branch(
+			lhs.unwrap_int_value(),
+			&end_block.basic_block,
+			&rhs_block.basic_block,
+		);
+		rhs_block
+			.builder
+			.build_unconditional_branch(&end_block.basic_block);
+
+		let result = end_block
+			.builder
+			.build_phi(self.in_module_generator.generator.context.bool_type(), "OR");
+
+		result.add_incoming(&[(
+			&self
+				.in_module_generator
+				.generator
+				.context
+				.bool_type()
+				.const_int(1, false),
+			&lhs_block.basic_block,
+		)]);
+		result.add_incoming(&[(&rhs.unwrap_int_value(), &rhs_block.basic_block)]);
+
+		Value {
+			value_type: ValueType::Bool,
+			llvm_type: AnyTypeEnum::IntType(self.in_module_generator.generator.context.bool_type()),
+			llvm_value: AnyValueEnum::PhiValue(result),
+		}
+	}
+
+	fn generate_expression_code_op_and(&'a self, ast: &AST) -> Value {
+		if ast.name != "op-and" {
+			panic!("op-and AST expected, got {}.", ast.name);
 		}
 
-		// TODO : Remove the builder from all generators except for the bb generator.
+		let mut lhs = self.generate_expression_code(&ast.children[0]);
+		let lhs_block = self.new_basic_block("AND lhs");
 
-		// Value {
+		let mut rhs = self.generate_expression_code(&ast.children[2]);
+		let rhs_block = self.new_basic_block("AND rhs");
 
-		// }
+		let end_block = self.new_basic_block("AND end");
 
-		unreachable!();
+		lhs = lhs_block.cast(lhs, ValueType::Bool);
+		rhs = rhs_block.cast(rhs, ValueType::Bool);
+
+		lhs_block.builder.build_conditional_branch(
+			lhs.unwrap_int_value(),
+			&rhs_block.basic_block,
+			&end_block.basic_block,
+		);
+		rhs_block
+			.builder
+			.build_unconditional_branch(&end_block.basic_block);
+
+		let result = end_block.builder.build_phi(
+			self.in_module_generator.generator.context.bool_type(),
+			"AND",
+		);
+
+		result.add_incoming(&[(
+			&self
+				.in_module_generator
+				.generator
+				.context
+				.bool_type()
+				.const_int(0, false),
+			&lhs_block.basic_block,
+		)]);
+		result.add_incoming(&[(&rhs.unwrap_int_value(), &rhs_block.basic_block)]);
+
+		Value {
+			value_type: ValueType::Bool,
+			llvm_type: AnyTypeEnum::IntType(self.in_module_generator.generator.context.bool_type()),
+			llvm_value: AnyValueEnum::PhiValue(result),
+		}
+	}
+
+	fn generate_expression_code_op_not(&'a self, ast: &AST) -> Value {
+		if ast.name != "op-not" {
+			panic!("op-not AST expected, got {}.", ast.name);
+		}
+
+		let mut lhs = self.generate_expression_code(&ast.children[1]);
+		let lhs_block = self.new_basic_block("NOT lhs");
+
+		lhs = lhs_block.cast(lhs, ValueType::Bool);
+
+		let result = lhs_block.builder.build_int_compare(
+			IntPredicate::EQ,
+			lhs.unwrap_int_value(),
+			self.in_module_generator
+				.generator
+				.context
+				.bool_type()
+				.const_int(0, false),
+			"NOT",
+		);
+
+		Value {
+			value_type: ValueType::Bool,
+			llvm_type: AnyTypeEnum::IntType(self.in_module_generator.generator.context.bool_type()),
+			llvm_value: AnyValueEnum::IntValue(result),
+		}
 	}
 }
 

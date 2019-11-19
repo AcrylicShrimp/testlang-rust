@@ -1,12 +1,14 @@
 extern crate inkwell;
 
 use super::generator::Generator;
-use super::generator::InFunctionGenerator;
+use super::generator::InBasicBlockGenerator;
 
 use inkwell::types::AnyTypeEnum;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::AnyValueEnum;
 use inkwell::values::BasicValueEnum;
+use inkwell::values::FloatValue;
+use inkwell::values::IntValue;
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 
@@ -99,6 +101,30 @@ pub struct Value {
 	pub llvm_value: AnyValueEnum,
 }
 
+impl Value {
+	pub fn unwrap_int_value(&self) -> IntValue {
+		match self.llvm_value {
+			AnyValueEnum::IntValue(int_value) => int_value,
+			AnyValueEnum::PhiValue(phi_value) => match phi_value.as_basic_value() {
+				BasicValueEnum::IntValue(int_value) => int_value,
+				_ => unreachable!(),
+			},
+			_ => unreachable!(),
+		}
+	}
+
+	pub fn unwrap_float_value(&self) -> FloatValue {
+		match self.llvm_value {
+			AnyValueEnum::FloatValue(float_value) => float_value,
+			AnyValueEnum::PhiValue(phi_value) => match phi_value.as_basic_value() {
+				BasicValueEnum::FloatValue(float_value) => float_value,
+				_ => unreachable!(),
+			},
+			_ => unreachable!(),
+		}
+	}
+}
+
 impl<'a> Generator {
 	pub fn to_any_type(&'a self, value_type: ValueType) -> AnyTypeEnum {
 		match value_type {
@@ -139,7 +165,7 @@ impl<'a> Generator {
 	}
 }
 
-impl<'a> InFunctionGenerator<'a> {
+impl<'a> InBasicBlockGenerator<'a> {
 	pub fn in_group_cast(&'a self, from: Value, to: ValueType) -> Value {
 		if from.value_type == to {
 			return from;
@@ -154,116 +180,192 @@ impl<'a> InFunctionGenerator<'a> {
 
 		let to_value = match from.llvm_value {
 			AnyValueEnum::IntValue(int_value) => match to {
-				ValueType::I8 | ValueType::U8 => {
-					AnyValueEnum::IntValue(self.builder.build_int_cast(
+				ValueType::I8 | ValueType::U8 => AnyValueEnum::IntValue(
+					self.builder.build_int_cast(
 						int_value,
-						self.in_module_generator.generator.context.i8_type(),
+						self.in_function_generator
+							.in_module_generator
+							.generator
+							.context
+							.i8_type(),
 						"CAST i2i",
-					))
-				}
-				ValueType::I16 | ValueType::U16 => {
-					AnyValueEnum::IntValue(self.builder.build_int_cast(
+					),
+				),
+				ValueType::I16 | ValueType::U16 => AnyValueEnum::IntValue(
+					self.builder.build_int_cast(
 						int_value,
-						self.in_module_generator.generator.context.i16_type(),
+						self.in_function_generator
+							.in_module_generator
+							.generator
+							.context
+							.i16_type(),
 						"CAST i2i",
-					))
-				}
-				ValueType::I32 | ValueType::U32 => {
-					AnyValueEnum::IntValue(self.builder.build_int_cast(
+					),
+				),
+				ValueType::I32 | ValueType::U32 => AnyValueEnum::IntValue(
+					self.builder.build_int_cast(
 						int_value,
-						self.in_module_generator.generator.context.i32_type(),
+						self.in_function_generator
+							.in_module_generator
+							.generator
+							.context
+							.i32_type(),
 						"CAST i2i",
-					))
-				}
-				ValueType::I64 | ValueType::U64 => {
-					AnyValueEnum::IntValue(self.builder.build_int_cast(
+					),
+				),
+				ValueType::I64 | ValueType::U64 => AnyValueEnum::IntValue(
+					self.builder.build_int_cast(
 						int_value,
-						self.in_module_generator.generator.context.i64_type(),
+						self.in_function_generator
+							.in_module_generator
+							.generator
+							.context
+							.i64_type(),
 						"CAST i2i",
-					))
-				}
-				ValueType::I128 | ValueType::U128 => {
-					AnyValueEnum::IntValue(self.builder.build_int_cast(
+					),
+				),
+				ValueType::I128 | ValueType::U128 => AnyValueEnum::IntValue(
+					self.builder.build_int_cast(
 						int_value,
-						self.in_module_generator.generator.context.i128_type(),
+						self.in_function_generator
+							.in_module_generator
+							.generator
+							.context
+							.i128_type(),
 						"CAST i2i",
-					))
-				}
+					),
+				),
 				_ => unreachable!(),
 			},
 			AnyValueEnum::FloatValue(float_value) => match to {
-				ValueType::F16 => AnyValueEnum::FloatValue(self.builder.build_float_cast(
-					float_value,
-					self.in_module_generator.generator.context.f16_type(),
-					"CAST f2f",
-				)),
-				ValueType::F32 => AnyValueEnum::FloatValue(self.builder.build_float_cast(
-					float_value,
-					self.in_module_generator.generator.context.f32_type(),
-					"CAST f2f",
-				)),
-				ValueType::F64 => AnyValueEnum::FloatValue(self.builder.build_float_cast(
-					float_value,
-					self.in_module_generator.generator.context.f64_type(),
-					"CAST f2f",
-				)),
+				ValueType::F16 => AnyValueEnum::FloatValue(
+					self.builder.build_float_cast(
+						float_value,
+						self.in_function_generator
+							.in_module_generator
+							.generator
+							.context
+							.f16_type(),
+						"CAST f2f",
+					),
+				),
+				ValueType::F32 => AnyValueEnum::FloatValue(
+					self.builder.build_float_cast(
+						float_value,
+						self.in_function_generator
+							.in_module_generator
+							.generator
+							.context
+							.f32_type(),
+						"CAST f2f",
+					),
+				),
+				ValueType::F64 => AnyValueEnum::FloatValue(
+					self.builder.build_float_cast(
+						float_value,
+						self.in_function_generator
+							.in_module_generator
+							.generator
+							.context
+							.f64_type(),
+						"CAST f2f",
+					),
+				),
 				_ => unreachable!(),
 			},
 			AnyValueEnum::PhiValue(phi_value) => match phi_value.as_basic_value() {
 				BasicValueEnum::IntValue(int_value) => match to {
-					ValueType::I8 | ValueType::U8 => {
-						AnyValueEnum::IntValue(self.builder.build_int_cast(
+					ValueType::I8 | ValueType::U8 => AnyValueEnum::IntValue(
+						self.builder.build_int_cast(
 							int_value,
-							self.in_module_generator.generator.context.i8_type(),
+							self.in_function_generator
+								.in_module_generator
+								.generator
+								.context
+								.i8_type(),
 							"CAST i2i",
-						))
-					}
-					ValueType::I16 | ValueType::U16 => {
-						AnyValueEnum::IntValue(self.builder.build_int_cast(
+						),
+					),
+					ValueType::I16 | ValueType::U16 => AnyValueEnum::IntValue(
+						self.builder.build_int_cast(
 							int_value,
-							self.in_module_generator.generator.context.i16_type(),
+							self.in_function_generator
+								.in_module_generator
+								.generator
+								.context
+								.i16_type(),
 							"CAST i2i",
-						))
-					}
-					ValueType::I32 | ValueType::U32 => {
-						AnyValueEnum::IntValue(self.builder.build_int_cast(
+						),
+					),
+					ValueType::I32 | ValueType::U32 => AnyValueEnum::IntValue(
+						self.builder.build_int_cast(
 							int_value,
-							self.in_module_generator.generator.context.i32_type(),
+							self.in_function_generator
+								.in_module_generator
+								.generator
+								.context
+								.i32_type(),
 							"CAST i2i",
-						))
-					}
-					ValueType::I64 | ValueType::U64 => {
-						AnyValueEnum::IntValue(self.builder.build_int_cast(
+						),
+					),
+					ValueType::I64 | ValueType::U64 => AnyValueEnum::IntValue(
+						self.builder.build_int_cast(
 							int_value,
-							self.in_module_generator.generator.context.i64_type(),
+							self.in_function_generator
+								.in_module_generator
+								.generator
+								.context
+								.i64_type(),
 							"CAST i2i",
-						))
-					}
-					ValueType::I128 | ValueType::U128 => {
-						AnyValueEnum::IntValue(self.builder.build_int_cast(
+						),
+					),
+					ValueType::I128 | ValueType::U128 => AnyValueEnum::IntValue(
+						self.builder.build_int_cast(
 							int_value,
-							self.in_module_generator.generator.context.i128_type(),
+							self.in_function_generator
+								.in_module_generator
+								.generator
+								.context
+								.i128_type(),
 							"CAST i2i",
-						))
-					}
+						),
+					),
 					_ => unreachable!(),
 				},
 				BasicValueEnum::FloatValue(float_value) => match to {
-					ValueType::F16 => AnyValueEnum::FloatValue(self.builder.build_float_cast(
-						float_value,
-						self.in_module_generator.generator.context.f16_type(),
-						"CAST f2f",
-					)),
-					ValueType::F32 => AnyValueEnum::FloatValue(self.builder.build_float_cast(
-						float_value,
-						self.in_module_generator.generator.context.f32_type(),
-						"CAST f2f",
-					)),
-					ValueType::F64 => AnyValueEnum::FloatValue(self.builder.build_float_cast(
-						float_value,
-						self.in_module_generator.generator.context.f64_type(),
-						"CAST f2f",
-					)),
+					ValueType::F16 => AnyValueEnum::FloatValue(
+						self.builder.build_float_cast(
+							float_value,
+							self.in_function_generator
+								.in_module_generator
+								.generator
+								.context
+								.f16_type(),
+							"CAST f2f",
+						),
+					),
+					ValueType::F32 => AnyValueEnum::FloatValue(
+						self.builder.build_float_cast(
+							float_value,
+							self.in_function_generator
+								.in_module_generator
+								.generator
+								.context
+								.f32_type(),
+							"CAST f2f",
+						),
+					),
+					ValueType::F64 => AnyValueEnum::FloatValue(
+						self.builder.build_float_cast(
+							float_value,
+							self.in_function_generator
+								.in_module_generator
+								.generator
+								.context
+								.f64_type(),
+							"CAST f2f",
+						),
+					),
 					_ => unreachable!(),
 				},
 				_ => unreachable!(),
@@ -273,7 +375,11 @@ impl<'a> InFunctionGenerator<'a> {
 
 		Value {
 			value_type: to,
-			llvm_type: self.in_module_generator.generator.to_any_type(to),
+			llvm_type: self
+				.in_function_generator
+				.in_module_generator
+				.generator
+				.to_any_type(to),
 			llvm_value: to_value,
 		}
 	}
@@ -320,8 +426,11 @@ impl<'a> InFunctionGenerator<'a> {
 			},
 			ValueTypeGroup::I => match from.llvm_value {
 				AnyValueEnum::IntValue(int_value) => {
-					if let BasicTypeEnum::IntType(int_type) =
-						self.in_module_generator.generator.to_basic_type(to)
+					if let BasicTypeEnum::IntType(int_type) = self
+						.in_function_generator
+						.in_module_generator
+						.generator
+						.to_basic_type(to)
 					{
 						AnyValueEnum::IntValue(
 							self.builder.build_int_cast(int_value, int_type, "CAST i2i"),
@@ -331,8 +440,11 @@ impl<'a> InFunctionGenerator<'a> {
 					}
 				}
 				AnyValueEnum::FloatValue(float_value) => {
-					if let BasicTypeEnum::IntType(int_type) =
-						self.in_module_generator.generator.to_basic_type(to)
+					if let BasicTypeEnum::IntType(int_type) = self
+						.in_function_generator
+						.in_module_generator
+						.generator
+						.to_basic_type(to)
 					{
 						AnyValueEnum::IntValue(self.builder.build_float_to_signed_int(
 							float_value,
@@ -347,8 +459,11 @@ impl<'a> InFunctionGenerator<'a> {
 			},
 			ValueTypeGroup::U => match from.llvm_value {
 				AnyValueEnum::IntValue(int_value) => {
-					if let BasicTypeEnum::IntType(int_type) =
-						self.in_module_generator.generator.to_basic_type(to)
+					if let BasicTypeEnum::IntType(int_type) = self
+						.in_function_generator
+						.in_module_generator
+						.generator
+						.to_basic_type(to)
 					{
 						AnyValueEnum::IntValue(
 							self.builder.build_int_cast(int_value, int_type, "CAST i2u"),
@@ -358,8 +473,11 @@ impl<'a> InFunctionGenerator<'a> {
 					}
 				}
 				AnyValueEnum::FloatValue(float_value) => {
-					if let BasicTypeEnum::IntType(int_type) =
-						self.in_module_generator.generator.to_basic_type(to)
+					if let BasicTypeEnum::IntType(int_type) = self
+						.in_function_generator
+						.in_module_generator
+						.generator
+						.to_basic_type(to)
 					{
 						AnyValueEnum::IntValue(self.builder.build_float_to_unsigned_int(
 							float_value,
@@ -374,8 +492,11 @@ impl<'a> InFunctionGenerator<'a> {
 			},
 			ValueTypeGroup::F => match from.llvm_value {
 				AnyValueEnum::IntValue(int_value) => {
-					if let BasicTypeEnum::FloatType(float_type) =
-						self.in_module_generator.generator.to_basic_type(to)
+					if let BasicTypeEnum::FloatType(float_type) = self
+						.in_function_generator
+						.in_module_generator
+						.generator
+						.to_basic_type(to)
 					{
 						if from.value_type.to_group().0 == ValueTypeGroup::I {
 							AnyValueEnum::FloatValue(
@@ -398,7 +519,11 @@ impl<'a> InFunctionGenerator<'a> {
 
 		Value {
 			value_type: to,
-			llvm_type: self.in_module_generator.generator.to_any_type(to),
+			llvm_type: self
+				.in_function_generator
+				.in_module_generator
+				.generator
+				.to_any_type(to),
 			llvm_value: to_value,
 		}
 	}
