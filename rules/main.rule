@@ -64,28 +64,25 @@ op-or: @op-or OpOr @op-and;
 op-and: @op-not;
 op-and: @op-and OpAnd @op-not;
 
-op-not: @op-comp;
+op-not: @op-cmp;
 op-not: OpNot @op-not;
 
-op-comp: @op-addsub;
-op-comp: @op-comp OpEq @op-addsub;
-op-comp: @op-comp OpNeq @op-addsub;
-op-comp: @op-comp OpLs @op-addsub;
-op-comp: @op-comp OpLsEq @op-addsub;
-op-comp: @op-comp OpGt @op-addsub;
-op-comp: @op-comp OpGtEq @op-addsub;
+op-cmp: @op-addsub;
+op-cmp: @op-cmp OpEq @op-addsub;
+op-cmp: @op-cmp OpNeq @op-addsub;
+op-cmp: @op-cmp OpLs @op-addsub;
+op-cmp: @op-cmp OpLsEq @op-addsub;
+op-cmp: @op-cmp OpGt @op-addsub;
+op-cmp: @op-cmp OpGtEq @op-addsub;
 
 op-addsub: @op-muldivmod;
 op-addsub: @op-addsub OpAdd @op-muldivmod;
 op-addsub: @op-addsub OpSub @op-muldivmod;
 
-op-muldivmod: @op-pow;
-op-muldivmod: @op-muldivmod OpMul @op-pow;
-op-muldivmod: @op-muldivmod OpDiv @op-pow;
-op-muldivmod: @op-muldivmod OpMod @op-pow;
-
-op-pow: @op-shift;
-op-pow: @op-shift OpPow @op-pow;
+op-muldivmod: @op-shift;
+op-muldivmod: @op-muldivmod OpMul @op-shift;
+op-muldivmod: @op-muldivmod OpDiv @op-shift;
+op-muldivmod: @op-muldivmod OpMod @op-shift;
 
 op-shift: @op-bit-or;
 op-shift: @op-shift OpShiftL @op-bit-or;

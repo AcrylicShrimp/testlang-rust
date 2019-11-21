@@ -3,7 +3,7 @@ mod lexer;
 mod parser;
 mod rule;
 
-// use codegen::generator::Generator as CodeGenerator;
+use codegen::generator::Generator as CodeGenerator;
 use parser::Parser;
 use rule::generator::generator::Generator;
 use rule::parser::Parser as RuleParser;
@@ -33,24 +33,19 @@ fn do_compile(content: String) {
 
     let ast = parser.parse(
         "
-        let test = 10;
-
-	if test == 10 { print('test is 10!'); }
-	else { print('test is not 10!'); }
-
-	for {
-		if 1000 < test { return; }
-	}
+        printf('\\n\\n%s', 'test');
     "
         .to_string(),
     );
 
     match ast {
         Ok(ast) => {
-            // let mut codegen = CodeGen::new();
+            let codegen = CodeGenerator::new();
+            let module = codegen.new_module("test");
 
-            // codegen.gen_code(&ast);
-            println!("{:?}", ast);
+            module.generate_code(&ast);
+
+            println!("{}", module.module.print_to_string());
         }
         Err(err) => println!("{}", err),
     };

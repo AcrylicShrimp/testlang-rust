@@ -12,4 +12,5 @@ num_cpus = "1.11.0"
 scoped_threadpool = "0.1.9"
 strum = "0.16.0"
 strum_macros = "0.16.0"
+either = "1.5.3"
 inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "llvm8-0" }

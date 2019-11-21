@@ -1,4 +1,6 @@
 extern crate inkwell;
+extern crate strum;
+extern crate strum_macros;
 
 use super::generator::Generator;
 use super::generator::InBasicBlockGenerator;
@@ -9,13 +11,18 @@ use inkwell::values::AnyValueEnum;
 use inkwell::values::BasicValueEnum;
 use inkwell::values::FloatValue;
 use inkwell::values::IntValue;
+use inkwell::values::PointerValue;
+use inkwell::AddressSpace;
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 
 use std::cmp::max;
 
-#[derive(PartialEq, Copy, Clone)]
+use strum_macros::Display;
+
+#[derive(Display, PartialEq, Copy, Clone)]
 pub enum ValueType {
+	Void,
 	Bool,
 	I8,
 	I16,
@@ -30,19 +37,23 @@ pub enum ValueType {
 	F16,
 	F32,
 	F64,
+	Str,
 }
 
-#[derive(PartialEq, Copy, Clone)]
+#[derive(Display, PartialEq, Copy, Clone)]
 pub enum ValueTypeGroup {
+	Void,
 	Bool,
 	I,
 	U,
 	F,
+	Str,
 }
 
 impl ValueType {
-	fn from_group((value_type_group, value_bit): (ValueTypeGroup, usize)) -> ValueType {
+	pub fn from_group((value_type_group, value_bit): (ValueTypeGroup, usize)) -> ValueType {
 		match (value_type_group, value_bit) {
+			(ValueTypeGroup::Void, 0) => ValueType::Void,
 			(ValueTypeGroup::Bool, 1) => ValueType::Bool,
 			(ValueTypeGroup::I, 8) => ValueType::I8,
 			(ValueTypeGroup::I, 16) => ValueType::I16,
@@ -57,12 +68,14 @@ impl ValueType {
 			(ValueTypeGroup::F, 16) => ValueType::F16,
 			(ValueTypeGroup::F, 32) => ValueType::F32,
 			(ValueTypeGroup::F, 64) => ValueType::F64,
+			(ValueTypeGroup::Str, 0) => ValueType::Str,
 			_ => unreachable!(),
 		}
 	}
 
-	fn to_group(&self) -> (ValueTypeGroup, usize) {
+	pub fn to_group(&self) -> (ValueTypeGroup, usize) {
 		match self {
+			ValueType::Void => (ValueTypeGroup::Void, 0),
 			ValueType::Bool => (ValueTypeGroup::Bool, 1),
 			ValueType::I8 => (ValueTypeGroup::I, 8),
 			ValueType::I16 => (ValueTypeGroup::I, 16),
@@ -77,10 +90,11 @@ impl ValueType {
 			ValueType::F16 => (ValueTypeGroup::F, 16),
 			ValueType::F32 => (ValueTypeGroup::F, 32),
 			ValueType::F64 => (ValueTypeGroup::F, 64),
+			ValueType::Str => (ValueTypeGroup::Str, 0),
 		}
 	}
 
-	fn merge(lhs: ValueType, rhs: ValueType) -> Option<ValueType> {
+	pub fn merge(lhs: ValueType, rhs: ValueType) -> Option<ValueType> {
 		let lhs_group = lhs.to_group();
 		let rhs_group = rhs.to_group();
 
@@ -123,11 +137,23 @@ impl Value {
 			_ => unreachable!(),
 		}
 	}
+
+	pub fn unwrap_string_value(&self) -> PointerValue {
+		match self.llvm_value {
+			AnyValueEnum::PointerValue(pointer_value) => pointer_value,
+			AnyValueEnum::PhiValue(phi_value) => match phi_value.as_basic_value() {
+				BasicValueEnum::PointerValue(pointer_value) => pointer_value,
+				_ => unreachable!(),
+			},
+			_ => unreachable!(),
+		}
+	}
 }
 
 impl<'a> Generator {
 	pub fn to_any_type(&'a self, value_type: ValueType) -> AnyTypeEnum {
 		match value_type {
+			ValueType::Void => AnyTypeEnum::VoidType(self.context.void_type()),
 			ValueType::Bool => AnyTypeEnum::IntType(self.context.bool_type()),
 			ValueType::I8 => AnyTypeEnum::IntType(self.context.i8_type()),
 			ValueType::I16 => AnyTypeEnum::IntType(self.context.i16_type()),
@@ -142,11 +168,15 @@ impl<'a> Generator {
 			ValueType::F16 => AnyTypeEnum::FloatType(self.context.f16_type()),
 			ValueType::F32 => AnyTypeEnum::FloatType(self.context.f32_type()),
 			ValueType::F64 => AnyTypeEnum::FloatType(self.context.f64_type()),
+			ValueType::Str => {
+				AnyTypeEnum::PointerType(self.context.i8_type().ptr_type(AddressSpace::Generic))
+			}
 		}
 	}
 
 	pub fn to_basic_type(&'a self, value_type: ValueType) -> BasicTypeEnum {
 		match value_type {
+			ValueType::Void => panic!("type error; unable to cast to basic type."),
 			ValueType::Bool => BasicTypeEnum::IntType(self.context.bool_type()),
 			ValueType::I8 => BasicTypeEnum::IntType(self.context.i8_type()),
 			ValueType::I16 => BasicTypeEnum::IntType(self.context.i16_type()),
@@ -161,6 +191,9 @@ impl<'a> Generator {
 			ValueType::F16 => BasicTypeEnum::FloatType(self.context.f16_type()),
 			ValueType::F32 => BasicTypeEnum::FloatType(self.context.f32_type()),
 			ValueType::F64 => BasicTypeEnum::FloatType(self.context.f64_type()),
+			ValueType::Str => {
+				BasicTypeEnum::PointerType(self.context.i8_type().ptr_type(AddressSpace::Generic))
+			}
 		}
 	}
 }
@@ -397,6 +430,7 @@ impl<'a> InBasicBlockGenerator<'a> {
 		}
 
 		let to_value = match to_group.0 {
+			ValueTypeGroup::Void => unreachable!(),
 			ValueTypeGroup::Bool => match from.llvm_value {
 				AnyValueEnum::IntValue(int_value) => {
 					if let AnyTypeEnum::IntType(int_type) = from.llvm_type {
@@ -515,6 +549,7 @@ impl<'a> InBasicBlockGenerator<'a> {
 				}
 				_ => unreachable!(),
 			},
+			ValueTypeGroup::Str => unreachable!(),
 		};
 
 		Value {

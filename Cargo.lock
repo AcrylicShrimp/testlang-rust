@@ -266,6 +266,7 @@ dependencies = [
 name = "testlang"
 version = "0.1.0"
 dependencies = [
+ "either 1.5.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "inkwell 0.1.0 (git+https://github.com/TheDan64/inkwell?branch=llvm8-0)",
  "itertools 0.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "num_cpus 1.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
