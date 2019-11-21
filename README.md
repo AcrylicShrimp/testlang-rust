@@ -6,8 +6,9 @@ This project was began for the complete implementation of the front-end of compi
 
 ## Structure
 - `src/rule`: Parses a `rule` file and generates a [CLR parsing table](https://www.javatpoint.com/clr-1-parsing).
-- `src/parser`: Parses tokens from a lexer and generates an AST. This parser is [driven by a parsing table](https://www.tutorialspoint.com/compiler_design/compiler_design_bottom_up_parser.htm).
-- `src/lexer`: Supplies tokens to a parser by reading given input.
+- `src/parser.rs`: Parses tokens from a lexer and generates an AST. This parser is [driven by a parsing table](https://www.tutorialspoint.com/compiler_design/compiler_design_bottom_up_parser.htm).
+- `src/lexer.rs`: Supplies tokens to a parser by reading given input.
+- `src/codegen`: Generates LLVM IR codes.
 
 ## Rule file
 The `rule` crate requires a valid rule file to generate a parsing table. This rule file is similar to [the BNF notation](https://en.wikipedia.org/wiki/Backus%E2%80%93Naur_form) except for that it is not supports alternations(`|` symbol).
