@@ -20,11 +20,13 @@ use inkwell::values::BasicValueEnum;
 use inkwell::values::FloatValue;
 use inkwell::values::FunctionValue;
 use inkwell::values::IntValue;
+use inkwell::values::PointerValue;
 use inkwell::AddressSpace;
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 use inkwell::OptimizationLevel;
 
+use std::collections::HashMap;
 use std::vec::Vec;
 
 pub struct Generator {
@@ -65,12 +67,12 @@ pub struct InModuleGenerator<'a> {
 	pub module: Module,
 }
 
-impl<'a> InModuleGenerator<'a> {
+impl<'a, 'b> InModuleGenerator<'a> {
 	pub fn new_function(
-		&'a self,
+		&'b self,
 		name: &str,
 		function_type: (Option<ValueType>, Vec<ValueType>),
-	) -> InFunctionGenerator<'a> {
+	) -> InFunctionGenerator<'a, 'b> {
 		let function_parameter_type: Vec<BasicTypeEnum> = function_type
 			.1
 			.into_iter()
@@ -94,34 +96,26 @@ impl<'a> InModuleGenerator<'a> {
 				.fn_type(function_parameter_type.as_slice(), false),
 		};
 
+		let function = self.module.add_function(name, function_type, None);
+
+		self.generator
+			.context
+			.append_basic_block(&function, "entry");
+
 		InFunctionGenerator {
 			name: name.to_owned(),
-			function: self.module.add_function(name, function_type, None),
+			function: function,
 			in_module_generator: self,
+			variable_table: HashMap::new(),
 		}
 	}
 
-	pub fn generate_code(&'a self, ast: &AST) {
+	pub fn generate_code(&'b self, ast: &AST) {
 		if ast.name != "module" {
 			panic!("module AST expected, got {}.", ast.name);
 		}
 
-		let main_function = self.new_function("main", (None, vec![]));
-
-		// DELETEME: Adding printf call instruction.
-		let basic_block = main_function.new_basic_block("printf call");
-		let first_parameter = basic_block
-			.builder
-			.build_global_string_ptr("%d", "printf format string");
-
-		basic_block.builder.build_call(
-			self.module.get_function("printf").unwrap(),
-			&[
-				BasicValueEnum::PointerValue(first_parameter.as_pointer_value()),
-				BasicValueEnum::IntValue(self.generator.context.i32_type().const_int(124, false)),
-			],
-			"call printf",
-		);
+		let mut main_function = self.new_function("main", (None, vec![]));
 
 		main_function.generate_code(&ast.children[0]);
 		main_function.last_basic_block().builder.build_return(None);
@@ -149,14 +143,15 @@ impl<'a> InModuleGenerator<'a> {
 	}
 }
 
-pub struct InFunctionGenerator<'a> {
+pub struct InFunctionGenerator<'a, 'b> {
 	pub name: String,
 	pub function: FunctionValue,
-	pub in_module_generator: &'a InModuleGenerator<'a>,
+	pub in_module_generator: &'a InModuleGenerator<'b>,
+	pub variable_table: HashMap<String, (ValueType, BasicTypeEnum, PointerValue)>,
 }
 
-impl<'a> InFunctionGenerator<'a> {
-	pub fn new_basic_block(&'a self, name: &str) -> InBasicBlockGenerator<'a> {
+impl<'a, 'b, 'c> InFunctionGenerator<'a, 'b> {
+	pub fn new_basic_block(&'c self, name: &str) -> InBasicBlockGenerator<'a, 'b, 'c> {
 		let basic_block = self
 			.in_module_generator
 			.generator
@@ -174,7 +169,7 @@ impl<'a> InFunctionGenerator<'a> {
 		}
 	}
 
-	pub fn last_basic_block(&'a self) -> InBasicBlockGenerator<'a> {
+	pub fn last_basic_block(&'c self) -> InBasicBlockGenerator<'a, 'b, 'c> {
 		let basic_block = self.function.get_last_basic_block().unwrap();
 		let builder = self.in_module_generator.generator.context.create_builder();
 
@@ -188,7 +183,31 @@ impl<'a> InFunctionGenerator<'a> {
 		}
 	}
 
-	pub fn generate_code(&'a self, ast: &AST) {
+	pub fn allocate_variable(
+		&'c mut self,
+		name: String,
+		value_type: ValueType,
+		basic_type: BasicTypeEnum,
+	) -> PointerValue {
+		if self.variable_table.contains_key(&name) {
+			panic!(
+				"multiple variable definition detected; {} is already defined.",
+				name
+			);
+		}
+
+		let variable_address = self
+			.last_basic_block()
+			.builder
+			.build_alloca(basic_type, &name);
+
+		self.variable_table
+			.insert(name, (value_type, basic_type, variable_address));
+
+		variable_address
+	}
+
+	pub fn generate_code(&'c mut self, ast: &AST) {
 		if ast.name != "statement-list" {
 			panic!("statement-list AST expected, got {}.", ast.name);
 		}
@@ -216,15 +235,87 @@ impl<'a> InFunctionGenerator<'a> {
 		}
 	}
 
-	fn generate_statement_code(&'a self, ast: &AST) {
+	fn generate_statement_code(&'c mut self, ast: &AST) {
 		if ast.name != "statement" {
 			panic!("statement AST expected, got {}.", ast.name);
 		}
 
-		self.generate_expression_code(&ast.children[0]);
+		match ast.children[0].name.as_ref() {
+			"scope-statement" => unimplemented!(),
+			"if-statement" => unimplemented!(),
+			"for-statement" => unimplemented!(),
+			"with-statement" => unimplemented!(),
+			"ret-statement" => unimplemented!(),
+			"let-statement" => self.generate_statement_code_let(&ast.children[0]),
+			"expression" => {
+				self.generate_expression_code(&ast.children[0]);
+			}
+			_ => unreachable!(),
+		};
 	}
 
-	fn generate_expression_code(&'a self, ast: &AST) -> Value {
+	fn generate_statement_code_let(&'c mut self, ast: &AST) {
+		if ast.children.len() == 4 {
+			let initial_value = self.generate_expression_code(&ast.children[3]);
+
+			if initial_value.value_type == ValueType::Void {
+				panic!("type error; void type is not allowed.");
+			}
+
+			let variable_type = self
+				.in_module_generator
+				.generator
+				.to_basic_type(initial_value.value_type);
+			let variable_address = self.allocate_variable(
+				ast.children[1]
+					.child
+					.as_ref()
+					.unwrap()
+					.token_content
+					.clone(),
+				initial_value.value_type,
+				variable_type,
+			);
+			let basic_block = self.last_basic_block();
+
+			match initial_value.llvm_value {
+				AnyValueEnum::IntValue(int_value) => {
+					basic_block.builder.build_store(variable_address, int_value);
+				}
+				AnyValueEnum::FloatValue(float_value) => {
+					basic_block
+						.builder
+						.build_store(variable_address, float_value);
+				}
+				AnyValueEnum::PointerValue(pointer_value) => {
+					basic_block
+						.builder
+						.build_store(variable_address, pointer_value);
+				}
+				AnyValueEnum::PhiValue(phi_value) => match phi_value.as_basic_value() {
+					BasicValueEnum::IntValue(int_value) => {
+						basic_block.builder.build_store(variable_address, int_value);
+					}
+					BasicValueEnum::FloatValue(float_value) => {
+						basic_block
+							.builder
+							.build_store(variable_address, float_value);
+					}
+					BasicValueEnum::PointerValue(pointer_value) => {
+						basic_block
+							.builder
+							.build_store(variable_address, pointer_value);
+					}
+					_ => unreachable!(),
+				},
+				_ => unreachable!(),
+			};
+		} else {
+			unimplemented!();
+		}
+	}
+
+	fn generate_expression_code(&'c self, ast: &AST) -> Value {
 		match ast.name.as_ref() {
 			"expression" => self.generate_expression_code(&ast.children[0]),
 			"assignment" => {
@@ -331,11 +422,11 @@ impl<'a> InFunctionGenerator<'a> {
 		}
 	}
 
-	fn generate_expression_code_assignment(&'a self, ast: &AST) -> Value {
+	fn generate_expression_code_assignment(&'c self, ast: &AST) -> Value {
 		unimplemented!();
 	}
 
-	fn generate_expression_code_op_or(&'a self, ast: &AST) -> Value {
+	fn generate_expression_code_op_or(&'c self, ast: &AST) -> Value {
 		if ast.name != "op-or" {
 			panic!("op-or AST expected, got {}.", ast.name);
 		}
@@ -389,7 +480,7 @@ impl<'a> InFunctionGenerator<'a> {
 		}
 	}
 
-	fn generate_expression_code_op_and(&'a self, ast: &AST) -> Value {
+	fn generate_expression_code_op_and(&'c self, ast: &AST) -> Value {
 		if ast.name != "op-and" {
 			panic!("op-and AST expected, got {}.", ast.name);
 		}
@@ -439,7 +530,7 @@ impl<'a> InFunctionGenerator<'a> {
 		}
 	}
 
-	fn generate_expression_code_op_not(&'a self, ast: &AST) -> Value {
+	fn generate_expression_code_op_not(&'c self, ast: &AST) -> Value {
 		if ast.name != "op-not" {
 			panic!("op-not AST expected, got {}.", ast.name);
 		}
@@ -469,7 +560,7 @@ impl<'a> InFunctionGenerator<'a> {
 		}
 	}
 
-	fn generate_expression_code_op_cmp(&'a self, ast: &AST) -> Value {
+	fn generate_expression_code_op_cmp(&'c self, ast: &AST) -> Value {
 		let mut lhs = self.generate_expression_code(&ast.children[0]);
 		let mut rhs = self.generate_expression_code(&ast.children[2]);
 
@@ -552,7 +643,7 @@ impl<'a> InFunctionGenerator<'a> {
 		}
 	}
 
-	fn generate_expression_code_op_addsub(&'a self, ast: &AST) -> Value {
+	fn generate_expression_code_op_addsub(&'c self, ast: &AST) -> Value {
 		let mut lhs = self.generate_expression_code(&ast.children[0]);
 		let mut rhs = self.generate_expression_code(&ast.children[2]);
 
@@ -619,7 +710,7 @@ impl<'a> InFunctionGenerator<'a> {
 		}
 	}
 
-	fn generate_expression_code_op_muldivmod(&'a self, ast: &AST) -> Value {
+	fn generate_expression_code_op_muldivmod(&'c self, ast: &AST) -> Value {
 		let mut lhs = self.generate_expression_code(&ast.children[0]);
 		let mut rhs = self.generate_expression_code(&ast.children[2]);
 
@@ -716,7 +807,7 @@ impl<'a> InFunctionGenerator<'a> {
 		}
 	}
 
-	fn generate_expression_code_op_shift(&'a self, ast: &AST) -> Value {
+	fn generate_expression_code_op_shift(&'c self, ast: &AST) -> Value {
 		let mut lhs = self.generate_expression_code(&ast.children[0]);
 		let mut rhs = self.generate_expression_code(&ast.children[2]);
 
@@ -788,7 +879,7 @@ impl<'a> InFunctionGenerator<'a> {
 		}
 	}
 
-	fn generate_expression_code_op_bit_or(&'a self, ast: &AST) -> Value {
+	fn generate_expression_code_op_bit_or(&'c self, ast: &AST) -> Value {
 		let mut lhs = self.generate_expression_code(&ast.children[0]);
 		let mut rhs = self.generate_expression_code(&ast.children[2]);
 
@@ -833,7 +924,7 @@ impl<'a> InFunctionGenerator<'a> {
 		}
 	}
 
-	fn generate_expression_code_op_bit_and(&'a self, ast: &AST) -> Value {
+	fn generate_expression_code_op_bit_and(&'c self, ast: &AST) -> Value {
 		let mut lhs = self.generate_expression_code(&ast.children[0]);
 		let mut rhs = self.generate_expression_code(&ast.children[2]);
 
@@ -878,7 +969,7 @@ impl<'a> InFunctionGenerator<'a> {
 		}
 	}
 
-	fn generate_expression_code_op_bit_xor(&'a self, ast: &AST) -> Value {
+	fn generate_expression_code_op_bit_xor(&'c self, ast: &AST) -> Value {
 		let mut lhs = self.generate_expression_code(&ast.children[0]);
 		let mut rhs = self.generate_expression_code(&ast.children[2]);
 
@@ -923,11 +1014,11 @@ impl<'a> InFunctionGenerator<'a> {
 		}
 	}
 
-	fn generate_expression_code_op_bit_not(&'a self, ast: &AST) -> Value {
+	fn generate_expression_code_op_bit_not(&'c self, ast: &AST) -> Value {
 		unimplemented!();
 	}
 
-	fn generate_expression_code_op_single(&'a self, ast: &AST) -> Value {
+	fn generate_expression_code_op_single(&'c self, ast: &AST) -> Value {
 		match ast.children[0].child.as_ref().unwrap().token_type {
 			TokenType::KeywordFrom => unimplemented!(),
 			TokenType::ParenL => self.generate_expression_code(&ast.children[1]),
@@ -937,7 +1028,7 @@ impl<'a> InFunctionGenerator<'a> {
 		}
 	}
 
-	fn generate_expression_code_function_call(&'a self, ast: &AST) -> Value {
+	fn generate_expression_code_function_call(&'c self, ast: &AST) -> Value {
 		let mut parameter_value_vec: Vec<BasicValueEnum> = Vec::new();
 
 		if ast.children.len() == 4 {
@@ -1007,11 +1098,33 @@ impl<'a> InFunctionGenerator<'a> {
 		}
 	}
 
-	fn generate_expression_code_left_value(&'a self, ast: &AST) -> Value {
-		unimplemented!();
+	fn generate_expression_code_left_value(&'c self, ast: &AST) -> Value {
+		let variable_name = &ast.children[0].child.as_ref().unwrap().token_content;
+		let basic_block = self.last_basic_block();
+
+		match self.variable_table.get(variable_name) {
+			Some((variable_value_type, _, variable_address)) => Value {
+				value_type: *variable_value_type,
+				llvm_type: self
+					.in_module_generator
+					.generator
+					.to_any_type(*variable_value_type),
+				llvm_value: AnyValueEnum::from(
+					basic_block
+						.builder
+						.build_load(*variable_address, "variable"),
+				),
+			},
+			None => {
+				panic!(
+					"undefined variable; {} is not defined in current scope.",
+					variable_name
+				);
+			}
+		}
 	}
 
-	fn generate_expression_code_literal(&'a self, ast: &AST) -> Value {
+	fn generate_expression_code_literal(&'c self, ast: &AST) -> Value {
 		let content = &ast.children[0].child.as_ref().unwrap().token_content;
 
 		match ast.children[0].name.as_ref() {
@@ -1089,9 +1202,9 @@ impl<'a> InFunctionGenerator<'a> {
 	}
 }
 
-pub struct InBasicBlockGenerator<'a> {
+pub struct InBasicBlockGenerator<'a, 'b, 'c> {
 	pub name: String,
 	pub basic_block: BasicBlock,
 	pub builder: Builder,
-	pub in_function_generator: &'a InFunctionGenerator<'a>,
+	pub in_function_generator: &'c InFunctionGenerator<'a, 'b>,
 }

@@ -198,8 +198,8 @@ impl<'a> Generator {
 	}
 }
 
-impl<'a> InBasicBlockGenerator<'a> {
-	pub fn in_group_cast(&'a self, from: Value, to: ValueType) -> Value {
+impl<'a, 'b, 'c> InBasicBlockGenerator<'a, 'b, 'c> {
+	pub fn in_group_cast(&'c self, from: Value, to: ValueType) -> Value {
 		if from.value_type == to {
 			return from;
 		}
@@ -417,7 +417,7 @@ impl<'a> InBasicBlockGenerator<'a> {
 		}
 	}
 
-	pub fn cast(&'a self, from: Value, to: ValueType) -> Value {
+	pub fn cast(&'c self, from: Value, to: ValueType) -> Value {
 		if from.value_type == to {
 			return from;
 		}

@@ -33,7 +33,9 @@ fn do_compile(content: String) {
 
     let ast = parser.parse(
         "
-        printf('\\n\\n%s', 'test');
+        let my_first_variable = 10;
+
+        printf('What is in the my_first_variable? %d\\n', my_first_variable);
     "
         .to_string(),
     );
@@ -44,8 +46,6 @@ fn do_compile(content: String) {
             let module = codegen.new_module("test");
 
             module.generate_code(&ast);
-
-            println!("{}", module.module.print_to_string());
         }
         Err(err) => println!("{}", err),
     };
