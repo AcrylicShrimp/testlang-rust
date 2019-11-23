@@ -98,7 +98,7 @@ op-bit-xor: @op-bit-not;
 op-bit-xor: @op-bit-and OpBitXor @op-bit-not;
 
 op-bit-not: @op-single;
-op-bit-not: OpBitNot @op-single;
+op-bit-not: OpBitNot @op-bit-not;
 
 op-single: KeywordFrom @scope-statement;
 op-single: ParenL @expression ParenR;

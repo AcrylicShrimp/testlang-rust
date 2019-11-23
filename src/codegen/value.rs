@@ -17,6 +17,7 @@ use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 
 use std::cmp::max;
+use std::convert::TryInto;
 
 use strum_macros::Display;
 

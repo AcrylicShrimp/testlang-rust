@@ -33,9 +33,13 @@ fn do_compile(content: String) {
 
     let ast = parser.parse(
         "
-        let my_first_variable = 10;
+        let lhs = rand();
+        let rhs = rand();
 
-        printf('What is in the my_first_variable? %d\\n', my_first_variable);
+        printf('%d, %d\\n', lhs, rhs);
+        printf('%d\\n', lhs | rhs);
+        printf('%d\\n', lhs & rhs);
+        printf('%d\\n', lhs ^ rhs);
     "
         .to_string(),
     );
@@ -43,7 +47,7 @@ fn do_compile(content: String) {
     match ast {
         Ok(ast) => {
             let codegen = CodeGenerator::new();
-            let module = codegen.new_module("test");
+            let mut module = codegen.new_module("test");
 
             module.generate_code(&ast);
         }

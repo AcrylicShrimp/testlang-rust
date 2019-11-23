@@ -41,23 +41,23 @@ impl<'a> Generator {
 	}
 
 	pub fn new_module(&'a self, name: &str) -> InModuleGenerator<'a> {
-		let module = self.context.create_module(name);
-
-		// Declare printf prototype.
-		let printf_function_type = self.context.i32_type().fn_type(
-			&[BasicTypeEnum::PointerType(
-				self.context.i8_type().ptr_type(AddressSpace::Generic),
-			)],
-			true,
-		);
-
-		module.add_function("printf", printf_function_type, None);
-
-		InModuleGenerator {
+		let mut in_module_generator = InModuleGenerator {
 			generator: self,
 			name: name.to_owned(),
-			module: module,
-		}
+			module: self.context.create_module(name),
+			function_table: HashMap::new(),
+		};
+
+		// Declare some C library function prototypes.
+		in_module_generator.new_function(
+			"printf",
+			(Some(ValueType::I32), vec![ValueType::Str]),
+			true,
+			true,
+		);
+		in_module_generator.new_function("rand", (Some(ValueType::I32), vec![]), false, true);
+
+		in_module_generator
 	}
 }
 
@@ -65,42 +65,55 @@ pub struct InModuleGenerator<'a> {
 	pub generator: &'a Generator,
 	pub name: String,
 	pub module: Module,
+	pub function_table: HashMap<String, (Option<ValueType>, Vec<ValueType>, FunctionValue)>,
 }
 
-impl<'a, 'b> InModuleGenerator<'a> {
+impl<'b, 'a: 'b> InModuleGenerator<'a> {
 	pub fn new_function(
-		&'b self,
+		&'b mut self,
 		name: &str,
 		function_type: (Option<ValueType>, Vec<ValueType>),
-	) -> InFunctionGenerator<'a, 'b> {
+		has_variadic_parameter: bool,
+		is_declaration: bool,
+	) -> InFunctionGenerator<'b, 'a> {
 		let function_parameter_type: Vec<BasicTypeEnum> = function_type
 			.1
+			.clone()
 			.into_iter()
 			.map(|param_type| self.generator.to_basic_type(param_type))
 			.collect();
 
-		let function_type = match function_type.0 {
-			Some(value_type) => match self.generator.to_basic_type(value_type) {
-				BasicTypeEnum::IntType(int_type) => {
-					int_type.fn_type(function_parameter_type.as_slice(), false)
-				}
-				BasicTypeEnum::FloatType(float_type) => {
-					float_type.fn_type(function_parameter_type.as_slice(), false)
-				}
-				_ => unreachable!(),
-			},
-			None => self
-				.generator
+		let llvm_function_type =
+			match function_type.0 {
+				Some(value_type) => match self.generator.to_basic_type(value_type) {
+					BasicTypeEnum::IntType(int_type) => {
+						int_type.fn_type(function_parameter_type.as_slice(), has_variadic_parameter)
+					}
+					BasicTypeEnum::FloatType(float_type) => float_type
+						.fn_type(function_parameter_type.as_slice(), has_variadic_parameter),
+					BasicTypeEnum::PointerType(pointer_type) => pointer_type
+						.fn_type(function_parameter_type.as_slice(), has_variadic_parameter),
+					_ => unreachable!(),
+				},
+				None => self
+					.generator
+					.context
+					.void_type()
+					.fn_type(function_parameter_type.as_slice(), has_variadic_parameter),
+			};
+
+		let function = self.module.add_function(name, llvm_function_type, None);
+
+		if !is_declaration {
+			self.generator
 				.context
-				.void_type()
-				.fn_type(function_parameter_type.as_slice(), false),
-		};
+				.append_basic_block(&function, "entry");
+		}
 
-		let function = self.module.add_function(name, function_type, None);
-
-		self.generator
-			.context
-			.append_basic_block(&function, "entry");
+		self.function_table.insert(
+			name.to_owned(),
+			(function_type.0, function_type.1, function),
+		);
 
 		InFunctionGenerator {
 			name: name.to_owned(),
@@ -110,12 +123,12 @@ impl<'a, 'b> InModuleGenerator<'a> {
 		}
 	}
 
-	pub fn generate_code(&'b self, ast: &AST) {
+	pub fn generate_code(&'b mut self, ast: &AST) {
 		if ast.name != "module" {
 			panic!("module AST expected, got {}.", ast.name);
 		}
 
-		let mut main_function = self.new_function("main", (None, vec![]));
+		let mut main_function = self.new_function("main", (None, vec![]), true, false);
 
 		main_function.generate_code(&ast.children[0]);
 		main_function.last_basic_block().builder.build_return(None);
@@ -143,15 +156,15 @@ impl<'a, 'b> InModuleGenerator<'a> {
 	}
 }
 
-pub struct InFunctionGenerator<'a, 'b> {
+pub struct InFunctionGenerator<'b, 'a> {
 	pub name: String,
 	pub function: FunctionValue,
-	pub in_module_generator: &'a InModuleGenerator<'b>,
+	pub in_module_generator: &'b InModuleGenerator<'a>,
 	pub variable_table: HashMap<String, (ValueType, BasicTypeEnum, PointerValue)>,
 }
 
-impl<'a, 'b, 'c> InFunctionGenerator<'a, 'b> {
-	pub fn new_basic_block(&'c self, name: &str) -> InBasicBlockGenerator<'a, 'b, 'c> {
+impl<'c, 'b: 'c, 'a: 'b> InFunctionGenerator<'b, 'a> {
+	pub fn new_basic_block(&'c self, name: &str) -> InBasicBlockGenerator<'c, 'b, 'a> {
 		let basic_block = self
 			.in_module_generator
 			.generator
@@ -1015,7 +1028,33 @@ impl<'a, 'b, 'c> InFunctionGenerator<'a, 'b> {
 	}
 
 	fn generate_expression_code_op_bit_not(&'c self, ast: &AST) -> Value {
-		unimplemented!();
+		let rhs = self.generate_expression_code(&ast.children[1]);
+		let block = self.last_basic_block();
+
+		let result = match rhs.value_type.to_group().0 {
+			ValueTypeGroup::Bool => {
+				panic!("type error; bitwise operation between bool is not allowed.");
+			}
+			ValueTypeGroup::I | ValueTypeGroup::U => {
+				block.builder.build_not(rhs.unwrap_int_value(), "BIT_NOT")
+			}
+			ValueTypeGroup::F => {
+				panic!("type error; bitwise operation between float is not allowed.");
+			}
+			ValueTypeGroup::Str => {
+				panic!("type error; bitwise operation between string is not allowed.");
+			}
+			ValueTypeGroup::Void => panic!("type error; void type is not valid."),
+		};
+
+		Value {
+			value_type: rhs.value_type,
+			llvm_type: self
+				.in_module_generator
+				.generator
+				.to_any_type(rhs.value_type),
+			llvm_value: AnyValueEnum::IntValue(result),
+		}
 	}
 
 	fn generate_expression_code_op_single(&'c self, ast: &AST) -> Value {
@@ -1046,6 +1085,7 @@ impl<'a, 'b, 'c> InFunctionGenerator<'a, 'b> {
 				parameter_stack.append(&mut parameter_vec);
 			}
 
+			// TODO: Add the type checking logic here.
 			parameter_value_vec = parameter_stack
 				.iter()
 				.rev()
@@ -1065,12 +1105,14 @@ impl<'a, 'b, 'c> InFunctionGenerator<'a, 'b> {
 		}
 
 		let function_name = &ast.children[0].child.as_ref().unwrap().token_content;
-		let function = match self.in_module_generator.module.get_function(function_name) {
+		let function = match self.in_module_generator.function_table.get(function_name) {
 			Some(function) => function,
-			None => panic!(
-				"unknown function detected; unable to find {} function.",
-				function_name
-			),
+			None => {
+				panic!(
+					"unknown function detected; unable to find {} function.",
+					function_name
+				);
+			}
 		};
 
 		let basic_block = self.last_basic_block();
@@ -1078,14 +1120,12 @@ impl<'a, 'b, 'c> InFunctionGenerator<'a, 'b> {
 		let result =
 			basic_block
 				.builder
-				.build_call(function, &parameter_value_vec, "function call");
+				.build_call(function.2, &parameter_value_vec, "function call");
 
 		match result.try_as_basic_value() {
 			Either::Left(basic_value) => Value {
-				value_type: ValueType::Void,
-				llvm_type: AnyTypeEnum::VoidType(
-					self.in_module_generator.generator.context.void_type(),
-				),
+				value_type: function.0.unwrap(),
+				llvm_type: AnyValueEnum::from(basic_value).get_type(),
 				llvm_value: AnyValueEnum::from(basic_value),
 			},
 			Either::Right(instruction_value) => Value {
@@ -1202,9 +1242,9 @@ impl<'a, 'b, 'c> InFunctionGenerator<'a, 'b> {
 	}
 }
 
-pub struct InBasicBlockGenerator<'a, 'b, 'c> {
+pub struct InBasicBlockGenerator<'c, 'b, 'a> {
 	pub name: String,
 	pub basic_block: BasicBlock,
 	pub builder: Builder,
-	pub in_function_generator: &'c InFunctionGenerator<'a, 'b>,
+	pub in_function_generator: &'c InFunctionGenerator<'b, 'a>,
 }
