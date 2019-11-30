@@ -110,14 +110,14 @@ impl ValueType {
 	}
 }
 
-pub struct Value {
+pub struct Value<'a> {
 	pub value_type: ValueType,
-	pub llvm_type: AnyTypeEnum,
-	pub llvm_value: AnyValueEnum,
+	pub llvm_type: AnyTypeEnum<'a>,
+	pub llvm_value: AnyValueEnum<'a>,
 }
 
-impl Value {
-	pub fn unwrap_int_value(&self) -> IntValue {
+impl<'a> Value<'a> {
+	pub fn unwrap_int_value(&self) -> IntValue<'a> {
 		match self.llvm_value {
 			AnyValueEnum::IntValue(int_value) => int_value,
 			AnyValueEnum::PhiValue(phi_value) => match phi_value.as_basic_value() {
@@ -128,7 +128,7 @@ impl Value {
 		}
 	}
 
-	pub fn unwrap_float_value(&self) -> FloatValue {
+	pub fn unwrap_float_value(&self) -> FloatValue<'a> {
 		match self.llvm_value {
 			AnyValueEnum::FloatValue(float_value) => float_value,
 			AnyValueEnum::PhiValue(phi_value) => match phi_value.as_basic_value() {
@@ -139,7 +139,7 @@ impl Value {
 		}
 	}
 
-	pub fn unwrap_string_value(&self) -> PointerValue {
+	pub fn unwrap_string_value(&self) -> PointerValue<'a> {
 		match self.llvm_value {
 			AnyValueEnum::PointerValue(pointer_value) => pointer_value,
 			AnyValueEnum::PhiValue(phi_value) => match phi_value.as_basic_value() {
@@ -199,8 +199,8 @@ impl<'a> Generator {
 	}
 }
 
-impl<'a, 'b, 'c> InBasicBlockGenerator<'a, 'b, 'c> {
-	pub fn in_group_cast(&'c self, from: Value, to: ValueType) -> Value {
+impl<'c, 'b: 'c, 'a: 'b> InBasicBlockGenerator<'c, 'b, 'a> {
+	pub fn in_group_cast(&'c self, from: Value<'a>, to: ValueType) -> Value<'a> {
 		if from.value_type == to {
 			return from;
 		}
@@ -418,7 +418,7 @@ impl<'a, 'b, 'c> InBasicBlockGenerator<'a, 'b, 'c> {
 		}
 	}
 
-	pub fn cast(&'c self, from: Value, to: ValueType) -> Value {
+	pub fn cast(&'c self, from: Value<'a>, to: ValueType) -> Value<'a> {
 		if from.value_type == to {
 			return from;
 		}
