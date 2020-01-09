@@ -20,7 +20,7 @@ It is super easy to define a new non-terminal. Don't forget to add an `@` sign a
 non-terminal-name: terminal @non-terminal terminal @non-terminal ... ;
 ```
 
-If you want use alternations, define it multiple times.
+If you want to use alternations, define it multiple times.
 
 ```
 statement: @if-statement;
