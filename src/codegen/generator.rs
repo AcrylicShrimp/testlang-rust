@@ -1,7 +1,7 @@
 extern crate either;
 extern crate inkwell;
 
-use super::value::{Value, ValueType, ValueTypeGroup};
+use super::value::{Value, ValueHandler, ValueType, ValueTypeHandler};
 use crate::lexer::TokenType;
 use crate::parser::AST;
 
@@ -10,18 +10,11 @@ use either::Either;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
-use inkwell::execution_engine::{ExecutionEngine, JitFunction};
 use inkwell::module::Module;
-use inkwell::types::AnyTypeEnum;
-use inkwell::types::BasicType;
 use inkwell::types::BasicTypeEnum;
-use inkwell::values::AnyValueEnum;
 use inkwell::values::BasicValueEnum;
-use inkwell::values::FloatValue;
 use inkwell::values::FunctionValue;
-use inkwell::values::IntValue;
 use inkwell::values::PointerValue;
-use inkwell::AddressSpace;
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 use inkwell::OptimizationLevel;
@@ -33,14 +26,14 @@ pub struct Generator {
 	pub context: Context,
 }
 
-impl<'a> Generator {
+impl<'ctx> Generator {
 	pub fn new() -> Generator {
 		let context = Context::create();
 
 		Generator { context: context }
 	}
 
-	pub fn new_module(&'a self, name: &str) -> InModuleGenerator<'a> {
+	pub fn new_module(&'ctx self, name: &str) -> InModuleGenerator<'ctx> {
 		let mut in_module_generator = InModuleGenerator {
 			generator: self,
 			name: name.to_owned(),
@@ -48,59 +41,63 @@ impl<'a> Generator {
 			function_table: HashMap::new(),
 		};
 
-		// Declare some C library function prototypes.
+		// DELETEME: Declare some C library function prototypes.
 		in_module_generator.new_function(
 			"printf",
-			(Some(ValueType::I32), vec![ValueType::Str]),
+			(ValueType::I32, vec![ValueType::Str]),
 			true,
 			true,
 		);
-		in_module_generator.new_function("rand", (Some(ValueType::I32), vec![]), false, true);
+		in_module_generator.new_function("rand", (ValueType::I32, vec![]), false, true);
 
 		in_module_generator
 	}
 }
 
-pub struct InModuleGenerator<'a> {
-	pub generator: &'a Generator,
+pub struct InModuleGenerator<'ctx> {
+	pub generator: &'ctx Generator,
 	pub name: String,
-	pub module: Module<'a>,
-	pub function_table: HashMap<String, (Option<ValueType>, Vec<ValueType>, FunctionValue<'a>)>,
+	pub module: Module<'ctx>,
+	pub function_table: HashMap<String, (ValueType, Vec<ValueType>, bool, FunctionValue<'ctx>)>,
 }
 
-impl<'b, 'a: 'b> InModuleGenerator<'a> {
+impl<'a, 'ctx: 'a> InModuleGenerator<'ctx> {
 	pub fn new_function(
-		&'b mut self,
+		&'a mut self,
 		name: &str,
-		function_type: (Option<ValueType>, Vec<ValueType>),
+		function_type: (ValueType, Vec<ValueType>),
 		has_variadic_parameter: bool,
 		is_declaration: bool,
-	) -> InFunctionGenerator<'b, 'a> {
-		let function_parameter_type: Vec<BasicTypeEnum<'a>> = function_type
+	) -> InFunctionGenerator<'a, 'ctx> {
+		let function_parameter_type: Vec<BasicTypeEnum<'ctx>> = function_type
 			.1
 			.clone()
 			.into_iter()
-			.map(|param_type| self.generator.to_basic_type(param_type))
+			.map(|param_type| param_type.to_basic_type(&self.generator.context))
 			.collect();
 
-		let llvm_function_type =
-			match function_type.0 {
-				Some(value_type) => match self.generator.to_basic_type(value_type) {
-					BasicTypeEnum::IntType(int_type) => {
-						int_type.fn_type(function_parameter_type.as_slice(), has_variadic_parameter)
-					}
-					BasicTypeEnum::FloatType(float_type) => float_type
-						.fn_type(function_parameter_type.as_slice(), has_variadic_parameter),
-					BasicTypeEnum::PointerType(pointer_type) => pointer_type
-						.fn_type(function_parameter_type.as_slice(), has_variadic_parameter),
-					_ => unreachable!(),
-				},
-				None => self
-					.generator
-					.context
-					.void_type()
-					.fn_type(function_parameter_type.as_slice(), has_variadic_parameter),
-			};
+		let llvm_function_type = function_type.0.invoke_handler(
+			&self.generator.context,
+			ValueTypeHandler::new()
+				.handle_void(&|_, ty| {
+					ty.fn_type(function_parameter_type.as_slice(), has_variadic_parameter)
+				})
+				.handle_bool(&|_, ty| {
+					ty.fn_type(function_parameter_type.as_slice(), has_variadic_parameter)
+				})
+				.handle_int(&|_, ty| {
+					ty.fn_type(function_parameter_type.as_slice(), has_variadic_parameter)
+				})
+				.handle_unsigned_int(&|_, ty| {
+					ty.fn_type(function_parameter_type.as_slice(), has_variadic_parameter)
+				})
+				.handle_float(&|_, ty| {
+					ty.fn_type(function_parameter_type.as_slice(), has_variadic_parameter)
+				})
+				.handle_str(&|_, ty| {
+					ty.fn_type(function_parameter_type.as_slice(), has_variadic_parameter)
+				}),
+		);
 
 		let function = self.module.add_function(name, llvm_function_type, None);
 
@@ -110,7 +107,12 @@ impl<'b, 'a: 'b> InModuleGenerator<'a> {
 
 		self.function_table.insert(
 			name.to_owned(),
-			(function_type.0, function_type.1, function),
+			(
+				function_type.0,
+				function_type.1,
+				has_variadic_parameter,
+				function,
+			),
 		);
 
 		InFunctionGenerator {
@@ -121,19 +123,19 @@ impl<'b, 'a: 'b> InModuleGenerator<'a> {
 		}
 	}
 
-	pub fn generate_code(&'b mut self, ast: &AST) {
+	pub fn generate_code(&'a mut self, ast: &AST) {
 		if ast.name != "module" {
 			panic!("module AST expected, got {}.", ast.name);
 		}
 
-		let mut main_function = self.new_function("main", (None, vec![]), true, false);
+		let mut main_function = self.new_function("main", (ValueType::Void, vec![]), true, false);
 
 		main_function.generate_code(&ast.children[0]);
 		main_function.last_basic_block().builder.build_return(None);
 
 		match self.module.verify() {
 			Ok(_) => (),
-			Err(err) => panic!("module verification failed; {}", err),
+			Err(err) => panic!("module verification failed; {:#?}", err),
 		};
 
 		println!("Executing...");
@@ -154,15 +156,16 @@ impl<'b, 'a: 'b> InModuleGenerator<'a> {
 	}
 }
 
-pub struct InFunctionGenerator<'b, 'a> {
+pub struct InFunctionGenerator<'mdl, 'ctx> {
 	pub name: String,
-	pub function: FunctionValue<'a>,
-	pub in_module_generator: &'b InModuleGenerator<'a>,
-	pub variable_table: HashMap<String, (ValueType, BasicTypeEnum<'a>, PointerValue<'a>)>,
+	pub function: FunctionValue<'ctx>,
+	pub in_module_generator: &'mdl InModuleGenerator<'ctx>,
+	// TODO: Create a scope generator and move below variable table to that.
+	pub variable_table: HashMap<String, (ValueType, PointerValue<'ctx>)>,
 }
 
-impl<'c, 'b: 'c, 'a: 'b> InFunctionGenerator<'b, 'a> {
-	pub fn new_basic_block(&'c self, name: &str) -> InBasicBlockGenerator<'c, 'b, 'a> {
+impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
+	pub fn new_basic_block(&'a self, name: &str) -> InBasicBlockGenerator<'a, 'mdl, 'ctx> {
 		let basic_block = self
 			.in_module_generator
 			.generator
@@ -180,7 +183,7 @@ impl<'c, 'b: 'c, 'a: 'b> InFunctionGenerator<'b, 'a> {
 		}
 	}
 
-	pub fn last_basic_block(&'c self) -> InBasicBlockGenerator<'c, 'b, 'a> {
+	pub fn last_basic_block(&'a self) -> InBasicBlockGenerator<'a, 'mdl, 'ctx> {
 		let basic_block = self.function.get_last_basic_block().unwrap();
 		let builder = self.in_module_generator.generator.context.create_builder();
 
@@ -195,11 +198,10 @@ impl<'c, 'b: 'c, 'a: 'b> InFunctionGenerator<'b, 'a> {
 	}
 
 	pub fn allocate_variable(
-		&'c mut self,
+		&'a mut self,
 		name: String,
 		value_type: ValueType,
-		basic_type: BasicTypeEnum<'a>,
-	) -> PointerValue<'a> {
+	) -> PointerValue<'ctx> {
 		if self.variable_table.contains_key(&name) {
 			panic!(
 				"multiple variable definition detected; {} is already defined.",
@@ -207,18 +209,18 @@ impl<'c, 'b: 'c, 'a: 'b> InFunctionGenerator<'b, 'a> {
 			);
 		}
 
-		let variable_address = self
-			.last_basic_block()
-			.builder
-			.build_alloca(basic_type, &name);
+		let variable_address = self.last_basic_block().builder.build_alloca(
+			value_type.to_basic_type(&self.in_module_generator.generator.context),
+			&name,
+		);
 
 		self.variable_table
-			.insert(name, (value_type, basic_type, variable_address));
+			.insert(name, (value_type, variable_address));
 
 		variable_address
 	}
 
-	pub fn generate_code(&'c mut self, ast: &AST) {
+	pub fn generate_code(&'a mut self, ast: &AST) {
 		if ast.name != "statement-list" {
 			panic!("statement-list AST expected, got {}.", ast.name);
 		}
@@ -246,11 +248,7 @@ impl<'c, 'b: 'c, 'a: 'b> InFunctionGenerator<'b, 'a> {
 		}
 	}
 
-	fn generate_statement_code(&'c mut self, ast: &AST) {
-		if ast.name != "statement" {
-			panic!("statement AST expected, got {}.", ast.name);
-		}
-
+	fn generate_statement_code(&'a mut self, ast: &AST) {
 		match ast.children[0].name.as_ref() {
 			"scope-statement" => unimplemented!(),
 			"if-statement" => unimplemented!(),
@@ -265,18 +263,14 @@ impl<'c, 'b: 'c, 'a: 'b> InFunctionGenerator<'b, 'a> {
 		};
 	}
 
-	fn generate_statement_code_let(&'c mut self, ast: &AST) {
+	fn generate_statement_code_let(&'a mut self, ast: &AST) {
 		if ast.children.len() == 4 {
 			let initial_value = self.generate_expression_code(&ast.children[3]);
 
-			if initial_value.value_type == ValueType::Void {
-				panic!("type error; void type is not allowed.");
+			if initial_value.get_type() == ValueType::Void {
+				panic!("type error; {} type is not allowed.", ValueType::Void);
 			}
 
-			let variable_type = self
-				.in_module_generator
-				.generator
-				.to_basic_type(initial_value.value_type);
 			let variable_address = self.allocate_variable(
 				ast.children[1]
 					.child
@@ -284,49 +278,34 @@ impl<'c, 'b: 'c, 'a: 'b> InFunctionGenerator<'b, 'a> {
 					.unwrap()
 					.token_content
 					.clone(),
-				initial_value.value_type,
-				variable_type,
+				initial_value.get_type(),
 			);
-			let basic_block = self.last_basic_block();
+			let block = self.last_basic_block();
 
-			match initial_value.llvm_value {
-				AnyValueEnum::IntValue(int_value) => {
-					basic_block.builder.build_store(variable_address, int_value);
-				}
-				AnyValueEnum::FloatValue(float_value) => {
-					basic_block
-						.builder
-						.build_store(variable_address, float_value);
-				}
-				AnyValueEnum::PointerValue(pointer_value) => {
-					basic_block
-						.builder
-						.build_store(variable_address, pointer_value);
-				}
-				AnyValueEnum::PhiValue(phi_value) => match phi_value.as_basic_value() {
-					BasicValueEnum::IntValue(int_value) => {
-						basic_block.builder.build_store(variable_address, int_value);
-					}
-					BasicValueEnum::FloatValue(float_value) => {
-						basic_block
-							.builder
-							.build_store(variable_address, float_value);
-					}
-					BasicValueEnum::PointerValue(pointer_value) => {
-						basic_block
-							.builder
-							.build_store(variable_address, pointer_value);
-					}
-					_ => unreachable!(),
-				},
-				_ => unreachable!(),
-			};
+			initial_value.invoke_handler(
+				ValueHandler::new()
+					.handle_bool(&|_, value| {
+						block.builder.build_store(variable_address, value);
+					})
+					.handle_int(&|_, value| {
+						block.builder.build_store(variable_address, value);
+					})
+					.handle_unsigned_int(&|_, value| {
+						block.builder.build_store(variable_address, value);
+					})
+					.handle_float(&|_, value| {
+						block.builder.build_store(variable_address, value);
+					})
+					.handle_str(&|_, value| {
+						block.builder.build_store(variable_address, value);
+					}),
+			);
 		} else {
 			unimplemented!();
 		}
 	}
 
-	fn generate_expression_code(&'c self, ast: &AST) -> Value<'a> {
+	fn generate_expression_code(&'a self, ast: &AST) -> Value<'ctx> {
 		match ast.name.as_ref() {
 			"expression" => self.generate_expression_code(&ast.children[0]),
 			"assignment" => {
@@ -433,15 +412,11 @@ impl<'c, 'b: 'c, 'a: 'b> InFunctionGenerator<'b, 'a> {
 		}
 	}
 
-	fn generate_expression_code_assignment(&'c self, ast: &AST) -> Value<'a> {
+	fn generate_expression_code_assignment(&'a self, _ast: &AST) -> Value<'ctx> {
 		unimplemented!();
 	}
 
-	fn generate_expression_code_op_or(&'c self, ast: &AST) -> Value<'a> {
-		if ast.name != "op-or" {
-			panic!("op-or AST expected, got {}.", ast.name);
-		}
-
+	fn generate_expression_code_op_or(&'a self, ast: &AST) -> Value<'ctx> {
 		// We don't need to create a new basic block for the lhs here,
 		// because always there's an basic block that is not terminated yet.
 		let lhs = self.generate_expression_code(&ast.children[0]);
@@ -454,17 +429,22 @@ impl<'c, 'b: 'c, 'a: 'b> InFunctionGenerator<'b, 'a> {
 		let rhs = self.generate_expression_code(&ast.children[2]);
 		let rhs_block = self.last_basic_block();
 
-		if lhs.value_type != ValueType::Bool || rhs.value_type != ValueType::Bool {
-			panic!("type error; boolean operation is only allowed between bool.");
+		if lhs.get_type() != ValueType::Bool || rhs.get_type() != ValueType::Bool {
+			panic!(
+				"type error; boolean operations are only allowed between {}s.",
+				ValueType::Bool
+			);
 		}
 
 		let end_block = self.new_basic_block("OR end");
 
-		lhs_block.builder.build_conditional_branch(
-			lhs.unwrap_int_value(),
-			&end_block.basic_block,
-			&rhs_block.basic_block,
-		);
+		lhs.invoke_handler(ValueHandler::new().handle_bool(&|_, value| {
+			lhs_block.builder.build_conditional_branch(
+				value,
+				&end_block.basic_block,
+				&rhs_block.basic_block,
+			);
+		}));
 		rhs_block
 			.builder
 			.build_unconditional_branch(&end_block.basic_block);
@@ -482,20 +462,12 @@ impl<'c, 'b: 'c, 'a: 'b> InFunctionGenerator<'b, 'a> {
 				.const_int(1, false),
 			&lhs_block.basic_block,
 		)]);
-		result.add_incoming(&[(&rhs.unwrap_int_value(), &rhs_block.basic_block)]);
+		result.add_incoming(&[(&rhs.to_basic_value(), &rhs_block.basic_block)]);
 
-		Value {
-			value_type: ValueType::Bool,
-			llvm_type: AnyTypeEnum::IntType(self.in_module_generator.generator.context.bool_type()),
-			llvm_value: AnyValueEnum::PhiValue(result),
-		}
+		Value::from_basic_value(ValueType::Bool, result.as_basic_value())
 	}
 
-	fn generate_expression_code_op_and(&'c self, ast: &AST) -> Value<'a> {
-		if ast.name != "op-and" {
-			panic!("op-and AST expected, got {}.", ast.name);
-		}
-
+	fn generate_expression_code_op_and(&'a self, ast: &AST) -> Value<'ctx> {
 		let lhs = self.generate_expression_code(&ast.children[0]);
 		let lhs_block = self.last_basic_block();
 
@@ -503,17 +475,22 @@ impl<'c, 'b: 'c, 'a: 'b> InFunctionGenerator<'b, 'a> {
 		let rhs = self.generate_expression_code(&ast.children[2]);
 		let rhs_block = self.last_basic_block();
 
-		if lhs.value_type != ValueType::Bool || rhs.value_type != ValueType::Bool {
-			panic!("type error; boolean operation is only allowed between bool.");
+		if lhs.get_type() != ValueType::Bool || rhs.get_type() != ValueType::Bool {
+			panic!(
+				"type error; boolean operations are only allowed between {}s.",
+				ValueType::Bool
+			);
 		}
 
 		let end_block = self.new_basic_block("AND end");
 
-		lhs_block.builder.build_conditional_branch(
-			lhs.unwrap_int_value(),
-			&rhs_block.basic_block,
-			&end_block.basic_block,
-		);
+		lhs.invoke_handler(ValueHandler::new().handle_bool(&|_, value| {
+			lhs_block.builder.build_conditional_branch(
+				value,
+				&rhs_block.basic_block,
+				&end_block.basic_block,
+			);
+		}));
 		rhs_block
 			.builder
 			.build_unconditional_branch(&end_block.basic_block);
@@ -532,541 +509,1025 @@ impl<'c, 'b: 'c, 'a: 'b> InFunctionGenerator<'b, 'a> {
 				.const_int(0, false),
 			&lhs_block.basic_block,
 		)]);
-		result.add_incoming(&[(&rhs.unwrap_int_value(), &rhs_block.basic_block)]);
+		result.add_incoming(&[(&rhs.to_basic_value(), &rhs_block.basic_block)]);
 
-		Value {
-			value_type: ValueType::Bool,
-			llvm_type: AnyTypeEnum::IntType(self.in_module_generator.generator.context.bool_type()),
-			llvm_value: AnyValueEnum::PhiValue(result),
-		}
+		Value::from_basic_value(ValueType::Bool, result.as_basic_value())
 	}
 
-	fn generate_expression_code_op_not(&'c self, ast: &AST) -> Value<'a> {
-		if ast.name != "op-not" {
-			panic!("op-not AST expected, got {}.", ast.name);
+	fn generate_expression_code_op_not(&'a self, ast: &AST) -> Value<'ctx> {
+		let lhs = self.generate_expression_code(&ast.children[1]);
+
+		if lhs.get_type() != ValueType::Bool {
+			panic!(
+				"type error; boolean operations are only allowed between {}s.",
+				ValueType::Bool
+			);
 		}
 
-		let lhs = self.generate_expression_code(&ast.children[1]);
 		let lhs_block = self.last_basic_block();
 
-		if lhs.value_type != ValueType::Bool {
-			panic!("type error; boolean operation is only allowed between bool.");
-		}
+		let result = lhs.invoke_handler(ValueHandler::new().handle_bool(&|_, value| {
+			lhs_block.builder.build_int_compare(
+				IntPredicate::EQ,
+				value,
+				self.in_module_generator
+					.generator
+					.context
+					.bool_type()
+					.const_int(0, false),
+				"NOT",
+			)
+		}));
 
-		let result = lhs_block.builder.build_int_compare(
-			IntPredicate::EQ,
-			lhs.unwrap_int_value(),
-			self.in_module_generator
-				.generator
-				.context
-				.bool_type()
-				.const_int(0, false),
-			"NOT",
-		);
-
-		Value {
-			value_type: ValueType::Bool,
-			llvm_type: AnyTypeEnum::IntType(self.in_module_generator.generator.context.bool_type()),
-			llvm_value: AnyValueEnum::IntValue(result),
-		}
+		Value::Bool { value: result }
 	}
 
-	fn generate_expression_code_op_cmp(&'c self, ast: &AST) -> Value<'a> {
+	fn generate_expression_code_op_cmp(&'a self, ast: &AST) -> Value<'ctx> {
 		let mut lhs = self.generate_expression_code(&ast.children[0]);
 		let mut rhs = self.generate_expression_code(&ast.children[2]);
 
 		let block = self.last_basic_block();
+		let matched = block.match_type(lhs, rhs);
 
-		match ValueType::merge(lhs.value_type, rhs.value_type) {
-			Some(merged_value_type) => {
-				lhs = block.cast(lhs, merged_value_type);
-				rhs = block.cast(rhs, merged_value_type);
-			}
-			None => panic!(
-				"type error; unable to compare {} and {}.",
-				lhs.value_type, rhs.value_type
+		match matched.0.get_type() {
+			ValueType::Void | ValueType::Str => panic!(
+				"type error; relational operations between {}s are not allowed.",
+				matched.0.get_type()
 			),
-		};
-
-		let result = match lhs.value_type.to_group().0 {
-			ValueTypeGroup::Bool | ValueTypeGroup::U => {
-				let predicate = match ast.children[1].child.as_ref().unwrap().token_type {
-					TokenType::OpEq => IntPredicate::EQ,
-					TokenType::OpNeq => IntPredicate::NE,
-					TokenType::OpLs => IntPredicate::ULT,
-					TokenType::OpLsEq => IntPredicate::ULE,
-					TokenType::OpGt => IntPredicate::UGT,
-					TokenType::OpGtEq => IntPredicate::UGE,
-					_ => unreachable!(),
-				};
-
-				block.builder.build_int_compare(
-					predicate,
-					lhs.unwrap_int_value(),
-					rhs.unwrap_int_value(),
-					"CMP",
-				)
-			}
-			ValueTypeGroup::I => {
-				let predicate = match ast.children[1].child.as_ref().unwrap().token_type {
-					TokenType::OpEq => IntPredicate::EQ,
-					TokenType::OpNeq => IntPredicate::NE,
-					TokenType::OpLs => IntPredicate::SLT,
-					TokenType::OpLsEq => IntPredicate::SLE,
-					TokenType::OpGt => IntPredicate::SGT,
-					TokenType::OpGtEq => IntPredicate::SGE,
-					_ => unreachable!(),
-				};
-
-				block.builder.build_int_compare(
-					predicate,
-					lhs.unwrap_int_value(),
-					rhs.unwrap_int_value(),
-					"CMP",
-				)
-			}
-			ValueTypeGroup::F => {
-				let predicate = match ast.children[1].child.as_ref().unwrap().token_type {
-					TokenType::OpEq => FloatPredicate::OEQ,
-					TokenType::OpNeq => FloatPredicate::ONE,
-					TokenType::OpLs => FloatPredicate::OLT,
-					TokenType::OpLsEq => FloatPredicate::OLE,
-					TokenType::OpGt => FloatPredicate::OGT,
-					TokenType::OpGtEq => FloatPredicate::OGE,
-					_ => unreachable!(),
-				};
-
-				block.builder.build_float_compare(
-					predicate,
-					lhs.unwrap_float_value(),
-					rhs.unwrap_float_value(),
-					"CMP",
-				)
-			}
-			ValueTypeGroup::Str => unimplemented!(),
-			ValueTypeGroup::Void => panic!("type error; void type is not valid."),
-		};
-
-		Value {
-			value_type: ValueType::Bool,
-			llvm_type: AnyTypeEnum::IntType(self.in_module_generator.generator.context.bool_type()),
-			llvm_value: AnyValueEnum::IntValue(result),
+			_ => (),
 		}
+
+		lhs = matched.0;
+		rhs = matched.1;
+
+		let int_predicate = match ast.children[1].child.as_ref().unwrap().token_type {
+			TokenType::OpEq => IntPredicate::EQ,
+			TokenType::OpNeq => IntPredicate::NE,
+			TokenType::OpLs => IntPredicate::ULT,
+			TokenType::OpLsEq => IntPredicate::ULE,
+			TokenType::OpGt => IntPredicate::UGT,
+			TokenType::OpGtEq => IntPredicate::UGE,
+			_ => unreachable!(),
+		};
+		let float_predicate = match ast.children[1].child.as_ref().unwrap().token_type {
+			TokenType::OpEq => FloatPredicate::OEQ,
+			TokenType::OpNeq => FloatPredicate::ONE,
+			TokenType::OpLs => FloatPredicate::OLT,
+			TokenType::OpLsEq => FloatPredicate::OLE,
+			TokenType::OpGt => FloatPredicate::OGT,
+			TokenType::OpGtEq => FloatPredicate::OGE,
+			_ => unreachable!(),
+		};
+
+		lhs.invoke_handler(
+			ValueHandler::new()
+				.handle_bool(&|_, lhs_value| {
+					rhs.invoke_handler(ValueHandler::new().handle_bool(&|_, rhs_value| {
+						Value::Bool {
+							value: block.builder.build_int_compare(
+								int_predicate,
+								lhs_value,
+								rhs_value,
+								"CMP",
+							),
+						}
+					}))
+				})
+				.handle_int(&|_, lhs_value| {
+					rhs.invoke_handler(ValueHandler::new().handle_int(&|_, rhs_value| {
+						Value::Bool {
+							value: block.builder.build_int_compare(
+								int_predicate,
+								lhs_value,
+								rhs_value,
+								"CMP",
+							),
+						}
+					}))
+				})
+				.handle_unsigned_int(&|_, lhs_value| {
+					rhs.invoke_handler(ValueHandler::new().handle_unsigned_int(&|_, rhs_value| {
+						Value::Bool {
+							value: block.builder.build_int_compare(
+								int_predicate,
+								lhs_value,
+								rhs_value,
+								"CMP",
+							),
+						}
+					}))
+				})
+				.handle_float(&|_, lhs_value| {
+					rhs.invoke_handler(ValueHandler::new().handle_float(&|_, rhs_value| {
+						Value::Bool {
+							value: block.builder.build_float_compare(
+								float_predicate,
+								lhs_value,
+								rhs_value,
+								"CMP",
+							),
+						}
+					}))
+				})
+				//
+				// TODO: Implement the str cmp functionality here.
+				//
+				// .handle_str(&|_, lhs_value| {
+				// 	rhs.invoke_handler(ValueHandler::new().handle_str(&|_, rhs_value| {
+				// 		Value::Bool {
+				// 			value: block.builder.build_int_compare(
+				// 				int_predicate,
+				// 				lhs_value,
+				// 				rhs_value,
+				// 				"CMP",
+				// 			),
+				// 		}
+				// 	}))
+				// }),
+		)
 	}
 
-	fn generate_expression_code_op_addsub(&'c self, ast: &AST) -> Value<'a> {
+	fn generate_expression_code_op_addsub(&'a self, ast: &AST) -> Value<'ctx> {
 		let mut lhs = self.generate_expression_code(&ast.children[0]);
 		let mut rhs = self.generate_expression_code(&ast.children[2]);
 
 		let block = self.last_basic_block();
+		let matched = block.match_type(lhs, rhs);
 
-		match ValueType::merge(lhs.value_type, rhs.value_type) {
-			Some(merged_value_type) => {
-				lhs = block.cast(lhs, merged_value_type);
-				rhs = block.cast(rhs, merged_value_type);
-			}
-			None => panic!(
-				"type error; unable to operate on between {} and {}.",
-				lhs.value_type, rhs.value_type
+		match matched.0.get_type() {
+			ValueType::Void | ValueType::Bool | ValueType::Str => panic!(
+				"type error; arithmetic operations between {}s are not allowed.",
+				matched.0.get_type()
 			),
-		};
-
-		let result = match lhs.value_type.to_group().0 {
-			ValueTypeGroup::Bool => {
-				panic!("type error; arithmetic operation between bool is not allowed.");
-			}
-			ValueTypeGroup::I | ValueTypeGroup::U => {
-				AnyValueEnum::IntValue(match ast.children[1].child.as_ref().unwrap().token_type {
-					TokenType::OpAdd => block.builder.build_int_add(
-						lhs.unwrap_int_value(),
-						rhs.unwrap_int_value(),
-						"ADD",
-					),
-					TokenType::OpSub => block.builder.build_int_sub(
-						lhs.unwrap_int_value(),
-						rhs.unwrap_int_value(),
-						"SUB",
-					),
-					_ => unreachable!(),
-				})
-			}
-			ValueTypeGroup::F => {
-				AnyValueEnum::FloatValue(match ast.children[1].child.as_ref().unwrap().token_type {
-					TokenType::OpAdd => block.builder.build_float_add(
-						lhs.unwrap_float_value(),
-						rhs.unwrap_float_value(),
-						"ADD",
-					),
-					TokenType::OpSub => block.builder.build_float_sub(
-						lhs.unwrap_float_value(),
-						rhs.unwrap_float_value(),
-						"SUB",
-					),
-					_ => unreachable!(),
-				})
-			}
-			ValueTypeGroup::Str => {
-				panic!("type error; arithmetic operation between string is not allowed.");
-			}
-			ValueTypeGroup::Void => panic!("type error; void type is not valid."),
-		};
-
-		Value {
-			value_type: lhs.value_type,
-			llvm_type: self
-				.in_module_generator
-				.generator
-				.to_any_type(lhs.value_type),
-			llvm_value: result,
+			_ => (),
 		}
+
+		lhs = matched.0;
+		rhs = matched.1;
+
+		let subtraction = ast.children[1].child.as_ref().unwrap().token_type == TokenType::OpSub;
+
+		lhs.invoke_handler(
+			ValueHandler::new()
+				.handle_int(&|_, lhs_value| {
+					rhs.invoke_handler(ValueHandler::new().handle_int(&|_, rhs_value| {
+						match rhs.get_type().get_bitwidth() {
+							8 => Value::I8 {
+								value: if subtraction {
+									block.builder.build_int_nsw_sub(lhs_value, rhs_value, "SUB")
+								} else {
+									block.builder.build_int_nsw_add(lhs_value, rhs_value, "ADD")
+								},
+							},
+							16 => Value::I16 {
+								value: if subtraction {
+									block.builder.build_int_nsw_sub(lhs_value, rhs_value, "SUB")
+								} else {
+									block.builder.build_int_nsw_add(lhs_value, rhs_value, "ADD")
+								},
+							},
+							32 => Value::I32 {
+								value: if subtraction {
+									block.builder.build_int_nsw_sub(lhs_value, rhs_value, "SUB")
+								} else {
+									block.builder.build_int_nsw_add(lhs_value, rhs_value, "ADD")
+								},
+							},
+							64 => Value::I64 {
+								value: if subtraction {
+									block.builder.build_int_nsw_sub(lhs_value, rhs_value, "SUB")
+								} else {
+									block.builder.build_int_nsw_add(lhs_value, rhs_value, "ADD")
+								},
+							},
+							128 => Value::I128 {
+								value: if subtraction {
+									block.builder.build_int_nsw_sub(lhs_value, rhs_value, "SUB")
+								} else {
+									block.builder.build_int_nsw_add(lhs_value, rhs_value, "ADD")
+								},
+							},
+							_ => unreachable!(),
+						}
+					}))
+				})
+				.handle_unsigned_int(&|_, lhs_value| {
+					rhs.invoke_handler(ValueHandler::new().handle_unsigned_int(&|_, rhs_value| {
+						match rhs.get_type().get_bitwidth() {
+							8 => Value::U8 {
+								value: if subtraction {
+									block.builder.build_int_sub(lhs_value, rhs_value, "SUB")
+								} else {
+									block.builder.build_int_add(lhs_value, rhs_value, "ADD")
+								},
+							},
+							16 => Value::U16 {
+								value: if subtraction {
+									block.builder.build_int_sub(lhs_value, rhs_value, "SUB")
+								} else {
+									block.builder.build_int_add(lhs_value, rhs_value, "ADD")
+								},
+							},
+							32 => Value::U32 {
+								value: if subtraction {
+									block.builder.build_int_sub(lhs_value, rhs_value, "SUB")
+								} else {
+									block.builder.build_int_add(lhs_value, rhs_value, "ADD")
+								},
+							},
+							64 => Value::U64 {
+								value: if subtraction {
+									block.builder.build_int_sub(lhs_value, rhs_value, "SUB")
+								} else {
+									block.builder.build_int_add(lhs_value, rhs_value, "ADD")
+								},
+							},
+							128 => Value::U128 {
+								value: if subtraction {
+									block.builder.build_int_sub(lhs_value, rhs_value, "SUB")
+								} else {
+									block.builder.build_int_add(lhs_value, rhs_value, "ADD")
+								},
+							},
+							_ => unreachable!(),
+						}
+					}))
+				})
+				.handle_float(&|_, lhs_value| {
+					rhs.invoke_handler(ValueHandler::new().handle_float(&|_, rhs_value| {
+						match rhs.get_type().get_bitwidth() {
+							16 => Value::F16 {
+								value: if subtraction {
+									block.builder.build_float_sub(lhs_value, rhs_value, "SUB")
+								} else {
+									block.builder.build_float_add(lhs_value, rhs_value, "ADD")
+								},
+							},
+							32 => Value::F32 {
+								value: if subtraction {
+									block.builder.build_float_sub(lhs_value, rhs_value, "SUB")
+								} else {
+									block.builder.build_float_add(lhs_value, rhs_value, "ADD")
+								},
+							},
+							64 => Value::F64 {
+								value: if subtraction {
+									block.builder.build_float_sub(lhs_value, rhs_value, "SUB")
+								} else {
+									block.builder.build_float_add(lhs_value, rhs_value, "ADD")
+								},
+							},
+							_ => unreachable!(),
+						}
+					}))
+				}),
+		)
 	}
 
-	fn generate_expression_code_op_muldivmod(&'c self, ast: &AST) -> Value<'a> {
+	fn generate_expression_code_op_muldivmod(&'a self, ast: &AST) -> Value<'ctx> {
 		let mut lhs = self.generate_expression_code(&ast.children[0]);
 		let mut rhs = self.generate_expression_code(&ast.children[2]);
 
 		let block = self.last_basic_block();
+		let matched = block.match_type(lhs, rhs);
 
-		match ValueType::merge(lhs.value_type, rhs.value_type) {
-			Some(merged_value_type) => {
-				lhs = block.cast(lhs, merged_value_type);
-				rhs = block.cast(rhs, merged_value_type);
-			}
-			None => panic!(
-				"type error; unable to operate on between {} and {}.",
-				lhs.value_type, rhs.value_type
+		match matched.0.get_type() {
+			ValueType::Void | ValueType::Bool | ValueType::Str => panic!(
+				"type error; arithmetic operations between {}s are not allowed.",
+				matched.0.get_type()
 			),
-		};
-
-		let result = match lhs.value_type.to_group().0 {
-			ValueTypeGroup::Bool => {
-				panic!("type error; arithmetic operation between bool is not allowed.");
-			}
-			ValueTypeGroup::I => {
-				AnyValueEnum::IntValue(match ast.children[1].child.as_ref().unwrap().token_type {
-					TokenType::OpMul => block.builder.build_int_mul(
-						lhs.unwrap_int_value(),
-						rhs.unwrap_int_value(),
-						"MUL",
-					),
-					TokenType::OpDiv => block.builder.build_int_signed_div(
-						lhs.unwrap_int_value(),
-						rhs.unwrap_int_value(),
-						"DIV",
-					),
-					TokenType::OpMod => block.builder.build_int_signed_rem(
-						lhs.unwrap_int_value(),
-						rhs.unwrap_int_value(),
-						"MOD",
-					),
-					_ => unreachable!(),
-				})
-			}
-			ValueTypeGroup::U => {
-				AnyValueEnum::IntValue(match ast.children[1].child.as_ref().unwrap().token_type {
-					TokenType::OpMul => block.builder.build_int_mul(
-						lhs.unwrap_int_value(),
-						rhs.unwrap_int_value(),
-						"MUL",
-					),
-					TokenType::OpDiv => block.builder.build_int_unsigned_div(
-						lhs.unwrap_int_value(),
-						rhs.unwrap_int_value(),
-						"DIV",
-					),
-					TokenType::OpMod => block.builder.build_int_unsigned_rem(
-						lhs.unwrap_int_value(),
-						rhs.unwrap_int_value(),
-						"MOD",
-					),
-					_ => unreachable!(),
-				})
-			}
-			ValueTypeGroup::F => {
-				AnyValueEnum::FloatValue(match ast.children[1].child.as_ref().unwrap().token_type {
-					TokenType::OpMul => block.builder.build_float_mul(
-						lhs.unwrap_float_value(),
-						rhs.unwrap_float_value(),
-						"MUL",
-					),
-					TokenType::OpDiv => block.builder.build_float_div(
-						lhs.unwrap_float_value(),
-						rhs.unwrap_float_value(),
-						"DIV",
-					),
-					TokenType::OpMod => block.builder.build_float_rem(
-						lhs.unwrap_float_value(),
-						rhs.unwrap_float_value(),
-						"MOD",
-					),
-					_ => unreachable!(),
-				})
-			}
-			ValueTypeGroup::Str => {
-				panic!("type error; arithmetic operation between string is not allowed.");
-			}
-			ValueTypeGroup::Void => panic!("type error; void type is not valid."),
-		};
-
-		Value {
-			value_type: lhs.value_type,
-			llvm_type: self
-				.in_module_generator
-				.generator
-				.to_any_type(lhs.value_type),
-			llvm_value: result,
+			_ => (),
 		}
+
+		lhs = matched.0;
+		rhs = matched.1;
+
+		let op_token_type = &ast.children[1].child.as_ref().unwrap().token_type;
+
+		lhs.invoke_handler(
+			ValueHandler::new()
+				.handle_int(&|_, lhs_value| {
+					rhs.invoke_handler(ValueHandler::new().handle_int(&|_, rhs_value| {
+						match rhs.get_type().get_bitwidth() {
+							8 => Value::I8 {
+								value: match op_token_type {
+									TokenType::OpMul => {
+										block.builder.build_int_nsw_mul(lhs_value, rhs_value, "MUL")
+									}
+									TokenType::OpDiv => block
+										.builder
+										.build_int_signed_div(lhs_value, rhs_value, "DIV"),
+									TokenType::OpMod => block
+										.builder
+										.build_int_signed_rem(lhs_value, rhs_value, "MOD"),
+									_ => unreachable!(),
+								},
+							},
+							16 => Value::I16 {
+								value: match op_token_type {
+									TokenType::OpMul => {
+										block.builder.build_int_nsw_mul(lhs_value, rhs_value, "MUL")
+									}
+									TokenType::OpDiv => block
+										.builder
+										.build_int_signed_div(lhs_value, rhs_value, "DIV"),
+									TokenType::OpMod => block
+										.builder
+										.build_int_signed_rem(lhs_value, rhs_value, "MOD"),
+									_ => unreachable!(),
+								},
+							},
+							32 => Value::I32 {
+								value: match op_token_type {
+									TokenType::OpMul => {
+										block.builder.build_int_nsw_mul(lhs_value, rhs_value, "MUL")
+									}
+									TokenType::OpDiv => block
+										.builder
+										.build_int_signed_div(lhs_value, rhs_value, "DIV"),
+									TokenType::OpMod => block
+										.builder
+										.build_int_signed_rem(lhs_value, rhs_value, "MOD"),
+									_ => unreachable!(),
+								},
+							},
+							64 => Value::I64 {
+								value: match op_token_type {
+									TokenType::OpMul => {
+										block.builder.build_int_nsw_mul(lhs_value, rhs_value, "MUL")
+									}
+									TokenType::OpDiv => block
+										.builder
+										.build_int_signed_div(lhs_value, rhs_value, "DIV"),
+									TokenType::OpMod => block
+										.builder
+										.build_int_signed_rem(lhs_value, rhs_value, "MOD"),
+									_ => unreachable!(),
+								},
+							},
+							128 => Value::I128 {
+								value: match op_token_type {
+									TokenType::OpMul => {
+										block.builder.build_int_nsw_mul(lhs_value, rhs_value, "MUL")
+									}
+									TokenType::OpDiv => block
+										.builder
+										.build_int_signed_div(lhs_value, rhs_value, "DIV"),
+									TokenType::OpMod => block
+										.builder
+										.build_int_signed_rem(lhs_value, rhs_value, "MOD"),
+									_ => unreachable!(),
+								},
+							},
+							_ => unreachable!(),
+						}
+					}))
+				})
+				.handle_unsigned_int(&|_, lhs_value| {
+					rhs.invoke_handler(ValueHandler::new().handle_unsigned_int(&|_, rhs_value| {
+						match rhs.get_type().get_bitwidth() {
+							8 => Value::U8 {
+								value: match op_token_type {
+									TokenType::OpMul => {
+										block.builder.build_int_mul(lhs_value, rhs_value, "MUL")
+									}
+									TokenType::OpDiv => block
+										.builder
+										.build_int_unsigned_div(lhs_value, rhs_value, "DIV"),
+									TokenType::OpMod => block
+										.builder
+										.build_int_unsigned_rem(lhs_value, rhs_value, "MOD"),
+									_ => unreachable!(),
+								},
+							},
+							16 => Value::U16 {
+								value: match op_token_type {
+									TokenType::OpMul => {
+										block.builder.build_int_mul(lhs_value, rhs_value, "MUL")
+									}
+									TokenType::OpDiv => block
+										.builder
+										.build_int_unsigned_div(lhs_value, rhs_value, "DIV"),
+									TokenType::OpMod => block
+										.builder
+										.build_int_unsigned_rem(lhs_value, rhs_value, "MOD"),
+									_ => unreachable!(),
+								},
+							},
+							32 => Value::U32 {
+								value: match op_token_type {
+									TokenType::OpMul => {
+										block.builder.build_int_mul(lhs_value, rhs_value, "MUL")
+									}
+									TokenType::OpDiv => block
+										.builder
+										.build_int_unsigned_div(lhs_value, rhs_value, "DIV"),
+									TokenType::OpMod => block
+										.builder
+										.build_int_unsigned_rem(lhs_value, rhs_value, "MOD"),
+									_ => unreachable!(),
+								},
+							},
+							64 => Value::U64 {
+								value: match op_token_type {
+									TokenType::OpMul => {
+										block.builder.build_int_mul(lhs_value, rhs_value, "MUL")
+									}
+									TokenType::OpDiv => block
+										.builder
+										.build_int_unsigned_div(lhs_value, rhs_value, "DIV"),
+									TokenType::OpMod => block
+										.builder
+										.build_int_unsigned_rem(lhs_value, rhs_value, "MOD"),
+									_ => unreachable!(),
+								},
+							},
+							128 => Value::U128 {
+								value: match op_token_type {
+									TokenType::OpMul => {
+										block.builder.build_int_mul(lhs_value, rhs_value, "MUL")
+									}
+									TokenType::OpDiv => block
+										.builder
+										.build_int_unsigned_div(lhs_value, rhs_value, "DIV"),
+									TokenType::OpMod => block
+										.builder
+										.build_int_unsigned_rem(lhs_value, rhs_value, "MOD"),
+									_ => unreachable!(),
+								},
+							},
+							_ => unreachable!(),
+						}
+					}))
+				})
+				.handle_float(&|_, lhs_value| {
+					rhs.invoke_handler(ValueHandler::new().handle_float(&|_, rhs_value| {
+						match rhs.get_type().get_bitwidth() {
+							16 => Value::F16 {
+								value: match op_token_type {
+									TokenType::OpMul => {
+										block.builder.build_float_mul(lhs_value, rhs_value, "MUL")
+									}
+									TokenType::OpDiv => {
+										block.builder.build_float_div(lhs_value, rhs_value, "DIV")
+									}
+									TokenType::OpMod => {
+										block.builder.build_float_rem(lhs_value, rhs_value, "MOD")
+									}
+									_ => unreachable!(),
+								},
+							},
+							32 => Value::F32 {
+								value: match op_token_type {
+									TokenType::OpMul => {
+										block.builder.build_float_mul(lhs_value, rhs_value, "MUL")
+									}
+									TokenType::OpDiv => {
+										block.builder.build_float_div(lhs_value, rhs_value, "DIV")
+									}
+									TokenType::OpMod => {
+										block.builder.build_float_rem(lhs_value, rhs_value, "MOD")
+									}
+									_ => unreachable!(),
+								},
+							},
+							64 => Value::F64 {
+								value: match op_token_type {
+									TokenType::OpMul => {
+										block.builder.build_float_mul(lhs_value, rhs_value, "MUL")
+									}
+									TokenType::OpDiv => {
+										block.builder.build_float_div(lhs_value, rhs_value, "DIV")
+									}
+									TokenType::OpMod => {
+										block.builder.build_float_rem(lhs_value, rhs_value, "MOD")
+									}
+									_ => unreachable!(),
+								},
+							},
+							_ => unreachable!(),
+						}
+					}))
+				}),
+		)
 	}
 
-	fn generate_expression_code_op_shift(&'c self, ast: &AST) -> Value<'a> {
+	fn generate_expression_code_op_shift(&'a self, ast: &AST) -> Value<'ctx> {
 		let mut lhs = self.generate_expression_code(&ast.children[0]);
 		let mut rhs = self.generate_expression_code(&ast.children[2]);
 
 		let block = self.last_basic_block();
+		let matched = block.match_type(lhs, rhs);
 
-		match ValueType::merge(lhs.value_type, rhs.value_type) {
-			Some(merged_value_type) => {
-				lhs = block.cast(lhs, merged_value_type);
-				rhs = block.cast(rhs, merged_value_type);
-			}
-			None => panic!(
-				"type error; unable to operate on between {} and {}.",
-				lhs.value_type, rhs.value_type
+		match matched.0.get_type() {
+			ValueType::Void
+			| ValueType::Bool
+			| ValueType::F16
+			| ValueType::F32
+			| ValueType::F64
+			| ValueType::Str => panic!(
+				"type error; bitwise operations between {}s are not allowed.",
+				matched.0.get_type()
 			),
-		};
+			_ => (),
+		}
 
-		let result = match lhs.value_type.to_group().0 {
-			ValueTypeGroup::Bool => {
-				panic!("type error; bitwise operation between bool is not allowed.");
-			}
-			ValueTypeGroup::I => {
-				AnyValueEnum::IntValue(match ast.children[1].child.as_ref().unwrap().token_type {
-					TokenType::OpShiftL => block.builder.build_left_shift(
-						lhs.unwrap_int_value(),
-						rhs.unwrap_int_value(),
-						"LSHIFT",
-					),
-					TokenType::OpShiftR => block.builder.build_right_shift(
-						lhs.unwrap_int_value(),
-						rhs.unwrap_int_value(),
-						true,
-						"RSHIFT",
-					),
+		lhs = matched.0;
+		rhs = matched.1;
+
+		let right = ast.children[1].child.as_ref().unwrap().token_type == TokenType::OpShiftR;
+
+		lhs.invoke_handler(
+			ValueHandler::new()
+				.handle_int(&|_, lhs_value| {
+					rhs.invoke_handler(ValueHandler::new().handle_int(&|_, rhs_value| {
+						match rhs.get_type().get_bitwidth() {
+							8 => Value::I8 {
+								value: if right {
+									block
+										.builder
+										.build_right_shift(lhs_value, rhs_value, true, "RSH")
+								} else {
+									block.builder.build_left_shift(lhs_value, rhs_value, "LSH")
+								},
+							},
+							16 => Value::I16 {
+								value: if right {
+									block
+										.builder
+										.build_right_shift(lhs_value, rhs_value, true, "RSH")
+								} else {
+									block.builder.build_left_shift(lhs_value, rhs_value, "LSH")
+								},
+							},
+							32 => Value::I32 {
+								value: if right {
+									block
+										.builder
+										.build_right_shift(lhs_value, rhs_value, true, "RSH")
+								} else {
+									block.builder.build_left_shift(lhs_value, rhs_value, "LSH")
+								},
+							},
+							64 => Value::I64 {
+								value: if right {
+									block
+										.builder
+										.build_right_shift(lhs_value, rhs_value, true, "RSH")
+								} else {
+									block.builder.build_left_shift(lhs_value, rhs_value, "LSH")
+								},
+							},
+							128 => Value::I128 {
+								value: if right {
+									block
+										.builder
+										.build_right_shift(lhs_value, rhs_value, true, "RSH")
+								} else {
+									block.builder.build_left_shift(lhs_value, rhs_value, "LSH")
+								},
+							},
+							_ => unreachable!(),
+						}
+					}))
+				})
+				.handle_unsigned_int(&|_, lhs_value| {
+					rhs.invoke_handler(ValueHandler::new().handle_unsigned_int(&|_, rhs_value| {
+						match rhs.get_type().get_bitwidth() {
+							8 => Value::U8 {
+								value: if right {
+									block
+										.builder
+										.build_right_shift(lhs_value, rhs_value, false, "RSH")
+								} else {
+									block.builder.build_left_shift(lhs_value, rhs_value, "LSH")
+								},
+							},
+							16 => Value::U16 {
+								value: if right {
+									block
+										.builder
+										.build_right_shift(lhs_value, rhs_value, false, "RSH")
+								} else {
+									block.builder.build_left_shift(lhs_value, rhs_value, "LSH")
+								},
+							},
+							32 => Value::U32 {
+								value: if right {
+									block
+										.builder
+										.build_right_shift(lhs_value, rhs_value, false, "RSH")
+								} else {
+									block.builder.build_left_shift(lhs_value, rhs_value, "LSH")
+								},
+							},
+							64 => Value::U64 {
+								value: if right {
+									block
+										.builder
+										.build_right_shift(lhs_value, rhs_value, false, "RSH")
+								} else {
+									block.builder.build_left_shift(lhs_value, rhs_value, "LSH")
+								},
+							},
+							128 => Value::U128 {
+								value: if right {
+									block
+										.builder
+										.build_right_shift(lhs_value, rhs_value, false, "RSH")
+								} else {
+									block.builder.build_left_shift(lhs_value, rhs_value, "LSH")
+								},
+							},
+							_ => unreachable!(),
+						}
+					}))
+				}),
+		)
+	}
+
+	fn generate_expression_code_op_bit_or(&'a self, ast: &AST) -> Value<'ctx> {
+		let mut lhs = self.generate_expression_code(&ast.children[0]);
+		let mut rhs = self.generate_expression_code(&ast.children[2]);
+
+		let block = self.last_basic_block();
+		let matched = block.match_type(lhs, rhs);
+
+		match matched.0.get_type() {
+			ValueType::Void
+			| ValueType::Bool
+			| ValueType::F16
+			| ValueType::F32
+			| ValueType::F64
+			| ValueType::Str => panic!(
+				"type error; bitwise operations between {}s are not allowed.",
+				matched.0.get_type()
+			),
+			_ => (),
+		}
+
+		lhs = matched.0;
+		rhs = matched.1;
+
+		lhs.invoke_handler(
+			ValueHandler::new()
+				.handle_int(&|_, lhs_value| {
+					rhs.invoke_handler(ValueHandler::new().handle_int(&|_, rhs_value| {
+						match rhs.get_type().get_bitwidth() {
+							8 => Value::I8 {
+								value: block.builder.build_or(lhs_value, rhs_value, "BITWISE OR"),
+							},
+							16 => Value::I16 {
+								value: block.builder.build_or(lhs_value, rhs_value, "BITWISE OR"),
+							},
+							32 => Value::I32 {
+								value: block.builder.build_or(lhs_value, rhs_value, "BITWISE OR"),
+							},
+							64 => Value::I64 {
+								value: block.builder.build_or(lhs_value, rhs_value, "BITWISE OR"),
+							},
+							128 => Value::I128 {
+								value: block.builder.build_or(lhs_value, rhs_value, "BITWISE OR"),
+							},
+							_ => unreachable!(),
+						}
+					}))
+				})
+				.handle_unsigned_int(&|_, lhs_value| {
+					rhs.invoke_handler(ValueHandler::new().handle_unsigned_int(&|_, rhs_value| {
+						match rhs.get_type().get_bitwidth() {
+							8 => Value::U8 {
+								value: block.builder.build_or(lhs_value, rhs_value, "BITWISE OR"),
+							},
+							16 => Value::U16 {
+								value: block.builder.build_or(lhs_value, rhs_value, "BITWISE OR"),
+							},
+							32 => Value::U32 {
+								value: block.builder.build_or(lhs_value, rhs_value, "BITWISE OR"),
+							},
+							64 => Value::U64 {
+								value: block.builder.build_or(lhs_value, rhs_value, "BITWISE OR"),
+							},
+							128 => Value::U128 {
+								value: block.builder.build_or(lhs_value, rhs_value, "BITWISE OR"),
+							},
+							_ => unreachable!(),
+						}
+					}))
+				}),
+		)
+	}
+
+	fn generate_expression_code_op_bit_and(&'a self, ast: &AST) -> Value<'ctx> {
+		let mut lhs = self.generate_expression_code(&ast.children[0]);
+		let mut rhs = self.generate_expression_code(&ast.children[2]);
+
+		let block = self.last_basic_block();
+		let matched = block.match_type(lhs, rhs);
+
+		match matched.0.get_type() {
+			ValueType::Void
+			| ValueType::Bool
+			| ValueType::F16
+			| ValueType::F32
+			| ValueType::F64
+			| ValueType::Str => panic!(
+				"type error; bitwise operations between {}s are not allowed.",
+				matched.0.get_type()
+			),
+			_ => (),
+		}
+
+		lhs = matched.0;
+		rhs = matched.1;
+
+		lhs.invoke_handler(
+			ValueHandler::new()
+				.handle_int(&|_, lhs_value| {
+					rhs.invoke_handler(ValueHandler::new().handle_int(&|_, rhs_value| {
+						match rhs.get_type().get_bitwidth() {
+							8 => Value::I8 {
+								value: block.builder.build_and(lhs_value, rhs_value, "BITWISE AND"),
+							},
+							16 => Value::I16 {
+								value: block.builder.build_and(lhs_value, rhs_value, "BITWISE AND"),
+							},
+							32 => Value::I32 {
+								value: block.builder.build_and(lhs_value, rhs_value, "BITWISE AND"),
+							},
+							64 => Value::I64 {
+								value: block.builder.build_and(lhs_value, rhs_value, "BITWISE AND"),
+							},
+							128 => Value::I128 {
+								value: block.builder.build_and(lhs_value, rhs_value, "BITWISE AND"),
+							},
+							_ => unreachable!(),
+						}
+					}))
+				})
+				.handle_unsigned_int(&|_, lhs_value| {
+					rhs.invoke_handler(ValueHandler::new().handle_unsigned_int(&|_, rhs_value| {
+						match rhs.get_type().get_bitwidth() {
+							8 => Value::U8 {
+								value: block.builder.build_and(lhs_value, rhs_value, "BITWISE AND"),
+							},
+							16 => Value::U16 {
+								value: block.builder.build_and(lhs_value, rhs_value, "BITWISE AND"),
+							},
+							32 => Value::U32 {
+								value: block.builder.build_and(lhs_value, rhs_value, "BITWISE AND"),
+							},
+							64 => Value::U64 {
+								value: block.builder.build_and(lhs_value, rhs_value, "BITWISE AND"),
+							},
+							128 => Value::U128 {
+								value: block.builder.build_and(lhs_value, rhs_value, "BITWISE AND"),
+							},
+							_ => unreachable!(),
+						}
+					}))
+				}),
+		)
+	}
+
+	fn generate_expression_code_op_bit_xor(&'a self, ast: &AST) -> Value<'ctx> {
+		let mut lhs = self.generate_expression_code(&ast.children[0]);
+		let mut rhs = self.generate_expression_code(&ast.children[2]);
+
+		let block = self.last_basic_block();
+		let matched = block.match_type(lhs, rhs);
+
+		match matched.0.get_type() {
+			ValueType::Void
+			| ValueType::Bool
+			| ValueType::F16
+			| ValueType::F32
+			| ValueType::F64
+			| ValueType::Str => panic!(
+				"type error; bitwise operations between {}s are not allowed.",
+				matched.0.get_type()
+			),
+			_ => (),
+		}
+
+		lhs = matched.0;
+		rhs = matched.1;
+
+		lhs.invoke_handler(
+			ValueHandler::new()
+				.handle_int(&|_, lhs_value| {
+					rhs.invoke_handler(ValueHandler::new().handle_int(&|_, rhs_value| {
+						match rhs.get_type().get_bitwidth() {
+							8 => Value::I8 {
+								value: block.builder.build_xor(lhs_value, rhs_value, "BITWISE XOR"),
+							},
+							16 => Value::I16 {
+								value: block.builder.build_xor(lhs_value, rhs_value, "BITWISE XOR"),
+							},
+							32 => Value::I32 {
+								value: block.builder.build_xor(lhs_value, rhs_value, "BITWISE XOR"),
+							},
+							64 => Value::I64 {
+								value: block.builder.build_xor(lhs_value, rhs_value, "BITWISE XOR"),
+							},
+							128 => Value::I128 {
+								value: block.builder.build_xor(lhs_value, rhs_value, "BITWISE XOR"),
+							},
+							_ => unreachable!(),
+						}
+					}))
+				})
+				.handle_unsigned_int(&|_, lhs_value| {
+					rhs.invoke_handler(ValueHandler::new().handle_unsigned_int(&|_, rhs_value| {
+						match rhs.get_type().get_bitwidth() {
+							8 => Value::U8 {
+								value: block.builder.build_xor(lhs_value, rhs_value, "BITWISE XOR"),
+							},
+							16 => Value::U16 {
+								value: block.builder.build_xor(lhs_value, rhs_value, "BITWISE XOR"),
+							},
+							32 => Value::U32 {
+								value: block.builder.build_xor(lhs_value, rhs_value, "BITWISE XOR"),
+							},
+							64 => Value::U64 {
+								value: block.builder.build_xor(lhs_value, rhs_value, "BITWISE XOR"),
+							},
+							128 => Value::U128 {
+								value: block.builder.build_xor(lhs_value, rhs_value, "BITWISE XOR"),
+							},
+							_ => unreachable!(),
+						}
+					}))
+				}),
+		)
+	}
+
+	fn generate_expression_code_op_bit_not(&'a self, ast: &AST) -> Value<'ctx> {
+		let lhs = self.generate_expression_code(&ast.children[1]);
+
+		match lhs.get_type() {
+			ValueType::Void
+			| ValueType::Bool
+			| ValueType::F16
+			| ValueType::F32
+			| ValueType::F64
+			| ValueType::Str => panic!(
+				"type error; bitwise operations between {}s are not allowed.",
+				lhs.get_type()
+			),
+			_ => (),
+		}
+
+		let block = self.last_basic_block();
+
+		lhs.invoke_handler(
+			ValueHandler::new()
+				.handle_int(&|_, lhs_value| match lhs.get_type().get_bitwidth() {
+					8 => Value::I8 {
+						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					},
+					16 => Value::I16 {
+						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					},
+					32 => Value::I32 {
+						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					},
+					64 => Value::I64 {
+						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					},
+					128 => Value::I128 {
+						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					},
 					_ => unreachable!(),
 				})
-			}
-			ValueTypeGroup::U => {
-				AnyValueEnum::IntValue(match ast.children[1].child.as_ref().unwrap().token_type {
-					TokenType::OpShiftL => block.builder.build_left_shift(
-						lhs.unwrap_int_value(),
-						rhs.unwrap_int_value(),
-						"LSHIFT",
-					),
-					TokenType::OpShiftR => block.builder.build_right_shift(
-						lhs.unwrap_int_value(),
-						rhs.unwrap_int_value(),
-						false,
-						"RSHIFT",
-					),
+				.handle_unsigned_int(&|_, lhs_value| match lhs.get_type().get_bitwidth() {
+					8 => Value::U8 {
+						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					},
+					16 => Value::U16 {
+						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					},
+					32 => Value::U32 {
+						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					},
+					64 => Value::U64 {
+						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					},
+					128 => Value::U128 {
+						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					},
 					_ => unreachable!(),
-				})
-			}
-			ValueTypeGroup::F => {
-				panic!("type error; bitwise operation between float is not allowed.");
-			}
-			ValueTypeGroup::Str => {
-				panic!("type error; bitwise operation between string is not allowed.");
-			}
-			ValueTypeGroup::Void => panic!("type error; void type is not valid."),
-		};
-
-		Value {
-			value_type: lhs.value_type,
-			llvm_type: self
-				.in_module_generator
-				.generator
-				.to_any_type(lhs.value_type),
-			llvm_value: result,
-		}
+				}),
+		)
 	}
 
-	fn generate_expression_code_op_bit_or(&'c self, ast: &AST) -> Value<'a> {
-		let mut lhs = self.generate_expression_code(&ast.children[0]);
-		let mut rhs = self.generate_expression_code(&ast.children[2]);
-
-		let block = self.last_basic_block();
-
-		match ValueType::merge(lhs.value_type, rhs.value_type) {
-			Some(merged_value_type) => {
-				lhs = block.cast(lhs, merged_value_type);
-				rhs = block.cast(rhs, merged_value_type);
-			}
-			None => panic!(
-				"type error; unable to operate on between {} and {}.",
-				lhs.value_type, rhs.value_type
-			),
-		};
-
-		let result = match lhs.value_type.to_group().0 {
-			ValueTypeGroup::Bool => {
-				panic!("type error; bitwise operation between bool is not allowed.");
-			}
-			ValueTypeGroup::I | ValueTypeGroup::U => {
-				block
-					.builder
-					.build_or(lhs.unwrap_int_value(), rhs.unwrap_int_value(), "BIT_OR")
-			}
-			ValueTypeGroup::F => {
-				panic!("type error; bitwise operation between float is not allowed.");
-			}
-			ValueTypeGroup::Str => {
-				panic!("type error; bitwise operation between string is not allowed.");
-			}
-			ValueTypeGroup::Void => panic!("type error; void type is not valid."),
-		};
-
-		Value {
-			value_type: lhs.value_type,
-			llvm_type: self
-				.in_module_generator
-				.generator
-				.to_any_type(lhs.value_type),
-			llvm_value: AnyValueEnum::IntValue(result),
-		}
-	}
-
-	fn generate_expression_code_op_bit_and(&'c self, ast: &AST) -> Value<'a> {
-		let mut lhs = self.generate_expression_code(&ast.children[0]);
-		let mut rhs = self.generate_expression_code(&ast.children[2]);
-
-		let block = self.last_basic_block();
-
-		match ValueType::merge(lhs.value_type, rhs.value_type) {
-			Some(merged_value_type) => {
-				lhs = block.cast(lhs, merged_value_type);
-				rhs = block.cast(rhs, merged_value_type);
-			}
-			None => panic!(
-				"type error; unable to operate on between {} and {}.",
-				lhs.value_type, rhs.value_type
-			),
-		};
-
-		let result = match lhs.value_type.to_group().0 {
-			ValueTypeGroup::Bool => {
-				panic!("type error; bitwise operation between bool is not allowed.");
-			}
-			ValueTypeGroup::I | ValueTypeGroup::U => {
-				block
-					.builder
-					.build_and(lhs.unwrap_int_value(), rhs.unwrap_int_value(), "BIT_AND")
-			}
-			ValueTypeGroup::F => {
-				panic!("type error; bitwise operation between float is not allowed.");
-			}
-			ValueTypeGroup::Str => {
-				panic!("type error; bitwise operation between string is not allowed.");
-			}
-			ValueTypeGroup::Void => panic!("type error; void type is not valid."),
-		};
-
-		Value {
-			value_type: lhs.value_type,
-			llvm_type: self
-				.in_module_generator
-				.generator
-				.to_any_type(lhs.value_type),
-			llvm_value: AnyValueEnum::IntValue(result),
-		}
-	}
-
-	fn generate_expression_code_op_bit_xor(&'c self, ast: &AST) -> Value<'a> {
-		let mut lhs = self.generate_expression_code(&ast.children[0]);
-		let mut rhs = self.generate_expression_code(&ast.children[2]);
-
-		let block = self.last_basic_block();
-
-		match ValueType::merge(lhs.value_type, rhs.value_type) {
-			Some(merged_value_type) => {
-				lhs = block.cast(lhs, merged_value_type);
-				rhs = block.cast(rhs, merged_value_type);
-			}
-			None => panic!(
-				"type error; unable to operate on between {} and {}.",
-				lhs.value_type, rhs.value_type
-			),
-		};
-
-		let result = match lhs.value_type.to_group().0 {
-			ValueTypeGroup::Bool => {
-				panic!("type error; bitwise operation between bool is not allowed.");
-			}
-			ValueTypeGroup::I | ValueTypeGroup::U => {
-				block
-					.builder
-					.build_xor(lhs.unwrap_int_value(), rhs.unwrap_int_value(), "BIT_XOR")
-			}
-			ValueTypeGroup::F => {
-				panic!("type error; bitwise operation between float is not allowed.");
-			}
-			ValueTypeGroup::Str => {
-				panic!("type error; bitwise operation between string is not allowed.");
-			}
-			ValueTypeGroup::Void => panic!("type error; void type is not valid."),
-		};
-
-		Value {
-			value_type: lhs.value_type,
-			llvm_type: self
-				.in_module_generator
-				.generator
-				.to_any_type(lhs.value_type),
-			llvm_value: AnyValueEnum::IntValue(result),
-		}
-	}
-
-	fn generate_expression_code_op_bit_not(&'c self, ast: &AST) -> Value<'a> {
-		let rhs = self.generate_expression_code(&ast.children[1]);
-		let block = self.last_basic_block();
-
-		let result = match rhs.value_type.to_group().0 {
-			ValueTypeGroup::Bool => {
-				panic!("type error; bitwise operation between bool is not allowed.");
-			}
-			ValueTypeGroup::I | ValueTypeGroup::U => {
-				block.builder.build_not(rhs.unwrap_int_value(), "BIT_NOT")
-			}
-			ValueTypeGroup::F => {
-				panic!("type error; bitwise operation between float is not allowed.");
-			}
-			ValueTypeGroup::Str => {
-				panic!("type error; bitwise operation between string is not allowed.");
-			}
-			ValueTypeGroup::Void => panic!("type error; void type is not valid."),
-		};
-
-		Value {
-			value_type: rhs.value_type,
-			llvm_type: self
-				.in_module_generator
-				.generator
-				.to_any_type(rhs.value_type),
-			llvm_value: AnyValueEnum::IntValue(result),
-		}
-	}
-
-	fn generate_expression_code_op_single(&'c self, ast: &AST) -> Value<'a> {
+	fn generate_expression_code_op_single(&'a self, ast: &AST) -> Value<'ctx> {
 		match ast.children[0].child.as_ref().unwrap().token_type {
-			TokenType::KeywordFrom => unimplemented!(),
+			TokenType::KeywordFrom => unimplemented!(), // TODO: Implement the from syntax.
 			TokenType::ParenL => self.generate_expression_code(&ast.children[1]),
 			TokenType::OpAdd => self.generate_expression_code(&ast.children[1]),
-			TokenType::OpSub => unimplemented!(),
+			TokenType::OpSub => self.generate_expression_code_op_neg(&ast.children[1]),
 			_ => unreachable!(),
 		}
 	}
 
-	fn generate_expression_code_function_call(&'c self, ast: &AST) -> Value<'a> {
-		let mut parameter_value_vec: Vec<BasicValueEnum> = Vec::new();
+	fn generate_expression_code_op_neg(&'a self, ast: &AST) -> Value<'ctx> {
+		let lhs = self.generate_expression_code(&ast.children[1]);
+
+		match lhs.get_type() {
+			ValueType::Void
+			| ValueType::Bool
+			| ValueType::U8
+			| ValueType::U16
+			| ValueType::U32
+			| ValueType::U64
+			| ValueType::U128
+			| ValueType::Str => panic!(
+				"type error; unary negation operations between {}s are not allowed.",
+				lhs.get_type()
+			),
+			_ => (),
+		}
+
+		let block = self.last_basic_block();
+
+		lhs.invoke_handler(
+			ValueHandler::new()
+				.handle_int(&|_, lhs_value| match lhs.get_type().get_bitwidth() {
+					8 => Value::I8 {
+						value: block.builder.build_int_nsw_sub(
+							self.in_module_generator
+								.generator
+								.context
+								.i8_type()
+								.const_int(0, false),
+							lhs_value,
+							"NEG",
+						),
+					},
+					16 => Value::I16 {
+						value: block.builder.build_int_nsw_sub(
+							self.in_module_generator
+								.generator
+								.context
+								.i16_type()
+								.const_int(0, false),
+							lhs_value,
+							"NEG",
+						),
+					},
+					32 => Value::I32 {
+						value: block.builder.build_int_nsw_sub(
+							self.in_module_generator
+								.generator
+								.context
+								.i32_type()
+								.const_int(0, false),
+							lhs_value,
+							"NEG",
+						),
+					},
+					64 => Value::I64 {
+						value: block.builder.build_int_nsw_sub(
+							self.in_module_generator
+								.generator
+								.context
+								.i64_type()
+								.const_int(0, false),
+							lhs_value,
+							"NEG",
+						),
+					},
+					128 => Value::I128 {
+						value: block.builder.build_int_nsw_sub(
+							self.in_module_generator
+								.generator
+								.context
+								.i128_type()
+								.const_int(0, false),
+							lhs_value,
+							"NEG",
+						),
+					},
+					_ => unreachable!(),
+				})
+				.handle_float(&|_, lhs_value| match lhs.get_type().get_bitwidth() {
+					16 => Value::F16 {
+						value: block.builder.build_float_neg(lhs_value, "NEG"),
+					},
+					32 => Value::F32 {
+						value: block.builder.build_float_neg(lhs_value, "NEG"),
+					},
+					64 => Value::F64 {
+						value: block.builder.build_float_neg(lhs_value, "NEG"),
+					},
+					_ => unreachable!(),
+				}),
+		)
+	}
+
+	fn generate_expression_code_function_call(&'a self, ast: &AST) -> Value<'ctx> {
+		let mut parameter_value_vec: Vec<Value<'ctx>> = Vec::new();
 
 		if ast.children.len() == 4 {
 			let mut parameter_stack: Vec<&AST> = ast.children[2].children.iter().rev().collect();
@@ -1083,22 +1544,11 @@ impl<'c, 'b: 'c, 'a: 'b> InFunctionGenerator<'b, 'a> {
 				parameter_stack.append(&mut parameter_vec);
 			}
 
-			// TODO: Add the type checking logic here.
 			parameter_value_vec = parameter_stack
 				.iter()
 				.rev()
 				.filter(|ast| ast.name == "expression")
-				.map(|ast| match self.generate_expression_code(ast).llvm_value {
-					AnyValueEnum::IntValue(int_value) => BasicValueEnum::IntValue(int_value),
-					AnyValueEnum::FloatValue(float_value) => {
-						BasicValueEnum::FloatValue(float_value)
-					}
-					AnyValueEnum::PhiValue(phi_value) => phi_value.as_basic_value(),
-					AnyValueEnum::PointerValue(pointer_value) => {
-						BasicValueEnum::PointerValue(pointer_value)
-					}
-					_ => unreachable!(),
-				})
+				.map(|ast| self.generate_expression_code(ast))
 				.collect();
 		}
 
@@ -1113,136 +1563,272 @@ impl<'c, 'b: 'c, 'a: 'b> InFunctionGenerator<'b, 'a> {
 			}
 		};
 
-		let basic_block = self.last_basic_block();
+		if function.2 && parameter_value_vec.len() < function.1.len() {
+			panic!(
+					"wrong argument passed; {} function takes at least {} arguments, but {} was supplied.",
+					function_name,
+					function.1.len(),
+					parameter_value_vec.len()
+				);
+		} else if !function.2 && parameter_value_vec.len() != function.1.len() {
+			panic!(
+				"wrong argument passed; {} function takes {} arguments, but {} was supplied.",
+				function_name,
+				function.1.len(),
+				parameter_value_vec.len()
+			);
+		}
 
-		let result =
-			basic_block
-				.builder
-				.build_call(function.2, &parameter_value_vec, "function call");
+		for param_index in 0..function.1.len() {
+			if parameter_value_vec[param_index].get_type() != function.1[param_index] {
+				panic!(
+					"wrong argument passed; {} function takes {} type as {}th argument, but {} type was supplied.",
+					function_name,
+					function.1[param_index],
+					param_index + 1,
+					parameter_value_vec[param_index].get_type()
+				);
+			}
+		}
+
+		let result = self.last_basic_block().builder.build_call(
+			function.3,
+			&parameter_value_vec
+				.iter()
+				.map(|value| value.to_basic_value())
+				.collect::<Vec<BasicValueEnum<'ctx>>>(),
+			"CALL",
+		);
 
 		match result.try_as_basic_value() {
-			Either::Left(basic_value) => Value {
-				value_type: function.0.unwrap(),
-				llvm_type: AnyValueEnum::from(basic_value).get_type(),
-				llvm_value: AnyValueEnum::from(basic_value),
-			},
-			Either::Right(instruction_value) => Value {
-				value_type: ValueType::Void,
-				llvm_type: AnyTypeEnum::VoidType(
-					self.in_module_generator.generator.context.void_type(),
-				),
-				llvm_value: AnyValueEnum::InstructionValue(instruction_value),
-			},
+			Either::Left(basic_value) => Value::from_basic_value(function.0, basic_value),
+			Either::Right(_) => Value::Void,
 		}
 	}
 
-	fn generate_expression_code_left_value(&'c self, ast: &AST) -> Value<'a> {
+	fn generate_expression_code_left_value(&'a self, ast: &AST) -> Value<'ctx> {
 		let variable_name = &ast.children[0].child.as_ref().unwrap().token_content;
 		let basic_block = self.last_basic_block();
 
 		match self.variable_table.get(variable_name) {
-			Some((variable_value_type, _, variable_address)) => Value {
-				value_type: *variable_value_type,
-				llvm_type: self
-					.in_module_generator
-					.generator
-					.to_any_type(*variable_value_type),
-				llvm_value: AnyValueEnum::from(
-					basic_block
-						.builder
-						.build_load(*variable_address, "variable"),
-				),
-			},
+			Some((value_type, address)) => Value::from_basic_value(
+				*value_type,
+				basic_block.builder.build_load(*address, "LOAD"),
+			),
 			None => {
 				panic!(
-					"undefined variable; {} is not defined in current scope.",
+					"undefined variable detected; {} is not defined in current scope.",
 					variable_name
 				);
 			}
 		}
 	}
 
-	fn generate_expression_code_literal(&'c self, ast: &AST) -> Value<'a> {
+	fn generate_expression_code_literal(&'a self, ast: &AST) -> Value<'ctx> {
 		let content = &ast.children[0].child.as_ref().unwrap().token_content;
 
 		match ast.children[0].name.as_ref() {
-			"LiteralBool" => Value {
-				value_type: ValueType::Bool,
-				llvm_type: AnyTypeEnum::IntType(
-					self.in_module_generator.generator.context.bool_type(),
-				),
-				llvm_value: AnyValueEnum::IntValue(
-					self.in_module_generator
-						.generator
-						.context
-						.bool_type()
-						.const_int(
-							if content.parse::<bool>().unwrap() {
-								1
-							} else {
-								0
-							},
-							false,
-						),
-				),
+			"LiteralBool" => Value::Bool {
+				value: self
+					.in_module_generator
+					.generator
+					.context
+					.bool_type()
+					.const_int(
+						if content.parse::<bool>().unwrap() {
+							1
+						} else {
+							0
+						},
+						false,
+					),
 			},
-			"LiteralInteger" => Value {
-				value_type: ValueType::I32,
-				llvm_type: AnyTypeEnum::IntType(
-					self.in_module_generator.generator.context.i32_type(),
-				),
-				llvm_value: AnyValueEnum::IntValue(
-					self.in_module_generator
-						.generator
-						.context
-						.i32_type()
-						.const_int(
-							if content.starts_with("-") {
-								content[1..].parse::<u64>().unwrap()
-							} else {
-								content.parse::<u64>().unwrap()
-							},
-							true,
-						),
-				),
+			"LiteralInteger" => Value::I32 {
+				value: self
+					.in_module_generator
+					.generator
+					.context
+					.i32_type()
+					.const_int(
+						if content.starts_with("-") {
+							content[1..].parse::<u64>().unwrap()
+						} else {
+							content.parse::<u64>().unwrap()
+						},
+						true,
+					),
 			},
-			"LiteralDecimal" => Value {
-				value_type: ValueType::F32,
-				llvm_type: AnyTypeEnum::FloatType(
-					self.in_module_generator.generator.context.f32_type(),
-				),
-				llvm_value: AnyValueEnum::FloatValue(
-					self.in_module_generator
-						.generator
-						.context
-						.f32_type()
-						.const_float(content.parse::<f64>().unwrap()),
-				),
+			"LiteralDecimal" => Value::F32 {
+				value: self
+					.in_module_generator
+					.generator
+					.context
+					.f32_type()
+					.const_float(content.parse::<f64>().unwrap()),
 			},
-			"LiteralString" => Value {
-				value_type: ValueType::Str,
-				llvm_type: AnyTypeEnum::PointerType(
-					self.in_module_generator
-						.generator
-						.context
-						.i8_type()
-						.ptr_type(AddressSpace::Generic),
-				),
-				llvm_value: AnyValueEnum::PointerValue(
-					self.last_basic_block()
-						.builder
-						.build_global_string_ptr(content, "String")
-						.as_pointer_value(),
-				),
+			"LiteralString" => Value::Str {
+				value: self
+					.last_basic_block()
+					.builder
+					.build_global_string_ptr(content, "str literal")
+					.as_pointer_value(),
 			},
 			_ => unreachable!(),
 		}
 	}
 }
 
-pub struct InBasicBlockGenerator<'c, 'b, 'a> {
+pub struct InBasicBlockGenerator<'fnc, 'mdl, 'ctx> {
 	pub name: String,
 	pub basic_block: BasicBlock,
-	pub builder: Builder<'a>,
-	pub in_function_generator: &'c InFunctionGenerator<'b, 'a>,
+	pub builder: Builder<'ctx>,
+	pub in_function_generator: &'fnc InFunctionGenerator<'mdl, 'ctx>,
+}
+
+impl<'a, 'fnc: 'a, 'mdl: 'fnc, 'ctx: 'fnc> InBasicBlockGenerator<'fnc, 'mdl, 'ctx> {
+	pub fn match_type(&'a self, lhs: Value<'ctx>, rhs: Value<'ctx>) -> (Value<'ctx>, Value<'ctx>) {
+		let mut lhs = lhs;
+		let mut rhs = rhs;
+
+		if lhs.get_type().get_group() != rhs.get_type().get_group() {
+			panic!(
+				"incompatible type; unable to match {} and {}",
+				lhs.get_type(),
+				rhs.get_type()
+			);
+		}
+
+		let perform_cast = |from: Value<'ctx>, to: ValueType| -> Value<'ctx> {
+			from.invoke_handler(
+				ValueHandler::new()
+					.handle_int(&|_, value| match to {
+						ValueType::I16 => Value::I16 {
+							value: self.builder.build_int_s_extend(
+								value,
+								self.in_function_generator
+									.in_module_generator
+									.generator
+									.context
+									.i16_type(),
+								"CAST -> i16",
+							),
+						},
+						ValueType::I32 => Value::I32 {
+							value: self.builder.build_int_s_extend(
+								value,
+								self.in_function_generator
+									.in_module_generator
+									.generator
+									.context
+									.i32_type(),
+								"CAST -> i32",
+							),
+						},
+						ValueType::I64 => Value::I64 {
+							value: self.builder.build_int_s_extend(
+								value,
+								self.in_function_generator
+									.in_module_generator
+									.generator
+									.context
+									.i64_type(),
+								"CAST -> i64",
+							),
+						},
+						ValueType::I128 => Value::I128 {
+							value: self.builder.build_int_s_extend(
+								value,
+								self.in_function_generator
+									.in_module_generator
+									.generator
+									.context
+									.i128_type(),
+								"CAST -> i128",
+							),
+						},
+						_ => unreachable!(),
+					})
+					.handle_unsigned_int(&|_, value| match to {
+						ValueType::U16 => Value::U16 {
+							value: self.builder.build_int_z_extend(
+								value,
+								self.in_function_generator
+									.in_module_generator
+									.generator
+									.context
+									.i16_type(),
+								"CAST -> u16",
+							),
+						},
+						ValueType::U32 => Value::U32 {
+							value: self.builder.build_int_z_extend(
+								value,
+								self.in_function_generator
+									.in_module_generator
+									.generator
+									.context
+									.i32_type(),
+								"CAST -> u32",
+							),
+						},
+						ValueType::U64 => Value::U64 {
+							value: self.builder.build_int_z_extend(
+								value,
+								self.in_function_generator
+									.in_module_generator
+									.generator
+									.context
+									.i64_type(),
+								"CAST -> u64",
+							),
+						},
+						ValueType::U128 => Value::U128 {
+							value: self.builder.build_int_z_extend(
+								value,
+								self.in_function_generator
+									.in_module_generator
+									.generator
+									.context
+									.i128_type(),
+								"CAST -> u128",
+							),
+						},
+						_ => unreachable!(),
+					})
+					.handle_float(&|_, value| match to {
+						ValueType::F32 => Value::F32 {
+							value: self.builder.build_float_ext(
+								value,
+								self.in_function_generator
+									.in_module_generator
+									.generator
+									.context
+									.f32_type(),
+								"CAST -> f32",
+							),
+						},
+						ValueType::F64 => Value::F64 {
+							value: self.builder.build_float_ext(
+								value,
+								self.in_function_generator
+									.in_module_generator
+									.generator
+									.context
+									.f64_type(),
+								"CAST -> f64",
+							),
+						},
+						_ => unreachable!(),
+					}),
+			)
+		};
+
+		if lhs.get_type().get_bitwidth() < rhs.get_type().get_bitwidth() {
+			lhs = perform_cast(lhs, rhs.get_type());
+		} else if lhs.get_type().get_bitwidth() > rhs.get_type().get_bitwidth() {
+			rhs = perform_cast(rhs, lhs.get_type());
+		}
+
+		(lhs, rhs)
+	}
 }

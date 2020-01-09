@@ -30,19 +30,7 @@ fn do_compile(content: String) {
     println!("{}", generator.state_graph.state_transition_map.len());
 
     let parser = Parser::new(generator.action_table);
-
-    let ast = parser.parse(
-        "
-        let lhs = rand();
-        let rhs = rand();
-
-        printf('%d, %d\\n', lhs, rhs);
-        printf('%d\\n', lhs | rhs);
-        printf('%d\\n', lhs & rhs);
-        printf('%d\\n', lhs ^ rhs);
-    "
-        .to_string(),
-    );
+    let ast = parser.parse(fs::read_to_string("sources/test.tl").unwrap());
 
     match ast {
         Ok(ast) => {
