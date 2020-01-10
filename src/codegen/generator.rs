@@ -49,6 +49,18 @@ impl<'ctx> Generator {
 			true,
 		);
 		in_module_generator.new_function("rand", (ValueType::I32, vec![]), false, true);
+		in_module_generator.new_function(
+			"srand",
+			(ValueType::Void, vec![ValueType::U32]),
+			false,
+			true,
+		);
+		in_module_generator.new_function(
+			"time",
+			(ValueType::U32, vec![ValueType::I32]),
+			false,
+			true,
+		);
 
 		in_module_generator
 	}
@@ -477,9 +489,10 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 		let lhs_block = self.last_basic_block();
 
 		// Create a new basic block and generates rhs.
-		// It may create some basic blocks,
-		// so we have to obtain the last block after it.
-		self.new_basic_block("OR rhs");
+		// It may create some new basic blocks,
+		// so we have to obtain both the first block and the last block.
+
+		let rhs_block_begin = self.new_basic_block("OR rhs");
 		let rhs = self.generate_expression_code(&ast.children[2]);
 		let rhs_block = self.last_basic_block();
 
@@ -496,7 +509,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 			lhs_block.builder.build_conditional_branch(
 				value,
 				&end_block.basic_block,
-				&rhs_block.basic_block,
+				&rhs_block_begin.basic_block,
 			);
 		}));
 		rhs_block
@@ -525,7 +538,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 		let lhs = self.generate_expression_code(&ast.children[0]);
 		let lhs_block = self.last_basic_block();
 
-		self.new_basic_block("AND rhs");
+		let rhs_block_begin = self.new_basic_block("OR rhs");
 		let rhs = self.generate_expression_code(&ast.children[2]);
 		let rhs_block = self.last_basic_block();
 
@@ -541,7 +554,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 		lhs.invoke_handler(ValueHandler::new().handle_bool(&|_, value| {
 			lhs_block.builder.build_conditional_branch(
 				value,
-				&rhs_block.basic_block,
+				&rhs_block_begin.basic_block,
 				&end_block.basic_block,
 			);
 		}));

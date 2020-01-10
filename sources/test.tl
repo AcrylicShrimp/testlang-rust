@@ -1,20 +1,24 @@
 
-let foo = rand();
+srand(time(0));
 
-printf('foo = %d\n', foo);
+let foo = rand() % 2;
+let bar = rand() % 2;
+let baz = rand() % 2;
 
-if foo < 10 {
-	printf('foo < 10\n');
-} else if foo < 100 {
-	printf('foo < 100\n');
-} else if foo < 1000 {
-	printf('foo < 1000\n');
-} else if foo < 10000 {
-	printf('foo < 10000\n');
-} else if foo < 100000 {
-	printf('foo < 100000\n');
-} else if foo < 1000000 {
-	printf('foo < 1000000\n');
-} else {
-	printf('foo >= 1000000\n');
+if foo == 0 and bar == 0 and baz == 0 {
+	printf('000\n');
+} else if foo == 0 and bar == 0 and baz == 1 {
+	printf('001\n');
+} else if foo == 0 and bar == 1 and baz == 0 {
+	printf('010\n');
+} else if foo == 0 and bar == 1 and baz == 1 {
+	printf('011\n');
+} else if foo == 1 and bar == 0 and baz == 0 {
+	printf('100\n');
+} else if foo == 1 and bar == 0 and baz == 1 {
+	printf('101\n');
+} else if foo == 1 and bar == 1 and baz == 0 {
+	printf('110\n');
+} else if foo == 1 and bar == 1 and baz == 1 {
+	printf('111\n');
 }
