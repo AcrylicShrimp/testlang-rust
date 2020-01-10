@@ -134,8 +134,8 @@ impl<'a, 'ctx: 'a> InModuleGenerator<'ctx> {
 		main_function.last_basic_block().builder.build_return(None);
 
 		match self.module.verify() {
-			Ok(_) => (),
-			Err(err) => panic!("module verification failed; {:#?}", err),
+			Ok(_) => println!("{}\n\n", self.module.print_to_string()),
+			Err(err) => panic!("module verification failed; {}", err),
 		};
 
 		println!("Executing...");
@@ -165,7 +165,7 @@ pub struct InFunctionGenerator<'mdl, 'ctx> {
 }
 
 impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
-	pub fn new_basic_block(&'a self, name: &str) -> InBasicBlockGenerator<'a, 'mdl, 'ctx> {
+	pub fn new_basic_block(&'a self, name: &str) -> InBasicBlockGenerator<'ctx> {
 		let basic_block = self
 			.in_module_generator
 			.generator
@@ -179,11 +179,10 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 			name: name.to_owned(),
 			basic_block: basic_block,
 			builder: builder,
-			in_function_generator: self,
 		}
 	}
 
-	pub fn last_basic_block(&'a self) -> InBasicBlockGenerator<'a, 'mdl, 'ctx> {
+	pub fn last_basic_block(&'a self) -> InBasicBlockGenerator<'ctx> {
 		let basic_block = self.function.get_last_basic_block().unwrap();
 		let builder = self.in_module_generator.generator.context.create_builder();
 
@@ -193,7 +192,6 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 			name: basic_block.get_name().to_str().unwrap().to_owned(),
 			basic_block: basic_block,
 			builder: builder,
-			in_function_generator: self,
 		}
 	}
 
@@ -250,8 +248,8 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 
 	fn generate_statement_code(&'a mut self, ast: &AST) {
 		match ast.children[0].name.as_ref() {
-			"scope-statement" => unimplemented!(),
-			"if-statement" => unimplemented!(),
+			"scope-statement" => self.generate_statement_code_scope(&ast.children[0]),
+			"if-statement" => self.generate_statement_code_if(&ast.children[0]),
 			"for-statement" => unimplemented!(),
 			"with-statement" => unimplemented!(),
 			"ret-statement" => unimplemented!(),
@@ -261,6 +259,62 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 			}
 			_ => unreachable!(),
 		};
+	}
+
+	fn generate_statement_code_scope(&'a mut self, ast: &AST) {
+		if ast.children.len() == 2 {
+			return;
+		}
+
+		// TODO: Add the local variable controll here.
+
+		self.generate_code(&ast.children[1]);
+	}
+
+	fn generate_statement_code_if(&'a mut self, ast: &AST) {
+		let criteria = self.generate_expression_code(&ast.children[1]);
+
+		if criteria.get_type() != ValueType::Bool {
+			panic!(
+				"type error; {} type extected, got {} type.",
+				ValueType::Bool,
+				criteria.get_type()
+			);
+		}
+
+		let block_criteria = self.last_basic_block();
+		let block_then_begin = self.new_basic_block("THEN block");
+
+		self.generate_statement_code_scope(&ast.children[2]);
+
+		let block_then = self.last_basic_block();
+		let block_else_begin = self.new_basic_block("ELSE block");
+
+		if ast.children.len() == 5 {
+			if ast.children[4].name == "scope-statement" {
+				self.generate_statement_code_scope(&ast.children[4]);
+			} else {
+				self.generate_statement_code_if(&ast.children[4]);
+			}
+		}
+
+		let block_else = self.last_basic_block();
+		let block_end = self.new_basic_block("ENDIF");
+
+		criteria.invoke_handler(ValueHandler::new().handle_bool(&|_, value| {
+			block_criteria.builder.build_conditional_branch(
+				value,
+				&block_then_begin.basic_block,
+				&block_else_begin.basic_block,
+			);
+		}));
+
+		block_then
+			.builder
+			.build_unconditional_branch(&block_end.basic_block);
+		block_else
+			.builder
+			.build_unconditional_branch(&block_end.basic_block);
 	}
 
 	fn generate_statement_code_let(&'a mut self, ast: &AST) {
@@ -547,7 +601,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 		let mut rhs = self.generate_expression_code(&ast.children[2]);
 
 		let block = self.last_basic_block();
-		let matched = block.match_type(lhs, rhs);
+		let matched = self.match_type(&block, lhs, rhs);
 
 		match matched.0.get_type() {
 			ValueType::Void | ValueType::Str => panic!(
@@ -652,7 +706,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 		let mut rhs = self.generate_expression_code(&ast.children[2]);
 
 		let block = self.last_basic_block();
-		let matched = block.match_type(lhs, rhs);
+		let matched = self.match_type(&block, lhs, rhs);
 
 		match matched.0.get_type() {
 			ValueType::Void | ValueType::Bool | ValueType::Str => panic!(
@@ -789,7 +843,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 		let mut rhs = self.generate_expression_code(&ast.children[2]);
 
 		let block = self.last_basic_block();
-		let matched = block.match_type(lhs, rhs);
+		let matched = self.match_type(&block, lhs, rhs);
 
 		match matched.0.get_type() {
 			ValueType::Void | ValueType::Bool | ValueType::Str => panic!(
@@ -1017,7 +1071,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 		let mut rhs = self.generate_expression_code(&ast.children[2]);
 
 		let block = self.last_basic_block();
-		let matched = block.match_type(lhs, rhs);
+		let matched = self.match_type(&block, lhs, rhs);
 
 		match matched.0.get_type() {
 			ValueType::Void
@@ -1151,7 +1205,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 		let mut rhs = self.generate_expression_code(&ast.children[2]);
 
 		let block = self.last_basic_block();
-		let matched = block.match_type(lhs, rhs);
+		let matched = self.match_type(&block, lhs, rhs);
 
 		match matched.0.get_type() {
 			ValueType::Void
@@ -1223,7 +1277,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 		let mut rhs = self.generate_expression_code(&ast.children[2]);
 
 		let block = self.last_basic_block();
-		let matched = block.match_type(lhs, rhs);
+		let matched = self.match_type(&block, lhs, rhs);
 
 		match matched.0.get_type() {
 			ValueType::Void
@@ -1295,7 +1349,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 		let mut rhs = self.generate_expression_code(&ast.children[2]);
 
 		let block = self.last_basic_block();
-		let matched = block.match_type(lhs, rhs);
+		let matched = self.match_type(&block, lhs, rhs);
 
 		match matched.0.get_type() {
 			ValueType::Void
@@ -1676,17 +1730,13 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 			_ => unreachable!(),
 		}
 	}
-}
 
-pub struct InBasicBlockGenerator<'fnc, 'mdl, 'ctx> {
-	pub name: String,
-	pub basic_block: BasicBlock,
-	pub builder: Builder<'ctx>,
-	pub in_function_generator: &'fnc InFunctionGenerator<'mdl, 'ctx>,
-}
-
-impl<'a, 'fnc: 'a, 'mdl: 'fnc, 'ctx: 'fnc> InBasicBlockGenerator<'fnc, 'mdl, 'ctx> {
-	pub fn match_type(&'a self, lhs: Value<'ctx>, rhs: Value<'ctx>) -> (Value<'ctx>, Value<'ctx>) {
+	pub fn match_type(
+		&'a self,
+		in_basic_block_generator: &InBasicBlockGenerator<'ctx>,
+		lhs: Value<'ctx>,
+		rhs: Value<'ctx>,
+	) -> (Value<'ctx>, Value<'ctx>) {
 		let mut lhs = lhs;
 		let mut rhs = rhs;
 
@@ -1703,46 +1753,30 @@ impl<'a, 'fnc: 'a, 'mdl: 'fnc, 'ctx: 'fnc> InBasicBlockGenerator<'fnc, 'mdl, 'ct
 				ValueHandler::new()
 					.handle_int(&|_, value| match to {
 						ValueType::I16 => Value::I16 {
-							value: self.builder.build_int_s_extend(
+							value: in_basic_block_generator.builder.build_int_s_extend(
 								value,
-								self.in_function_generator
-									.in_module_generator
-									.generator
-									.context
-									.i16_type(),
+								self.in_module_generator.generator.context.i16_type(),
 								"CAST -> i16",
 							),
 						},
 						ValueType::I32 => Value::I32 {
-							value: self.builder.build_int_s_extend(
+							value: in_basic_block_generator.builder.build_int_s_extend(
 								value,
-								self.in_function_generator
-									.in_module_generator
-									.generator
-									.context
-									.i32_type(),
+								self.in_module_generator.generator.context.i32_type(),
 								"CAST -> i32",
 							),
 						},
 						ValueType::I64 => Value::I64 {
-							value: self.builder.build_int_s_extend(
+							value: in_basic_block_generator.builder.build_int_s_extend(
 								value,
-								self.in_function_generator
-									.in_module_generator
-									.generator
-									.context
-									.i64_type(),
+								self.in_module_generator.generator.context.i64_type(),
 								"CAST -> i64",
 							),
 						},
 						ValueType::I128 => Value::I128 {
-							value: self.builder.build_int_s_extend(
+							value: in_basic_block_generator.builder.build_int_s_extend(
 								value,
-								self.in_function_generator
-									.in_module_generator
-									.generator
-									.context
-									.i128_type(),
+								self.in_module_generator.generator.context.i128_type(),
 								"CAST -> i128",
 							),
 						},
@@ -1750,46 +1784,30 @@ impl<'a, 'fnc: 'a, 'mdl: 'fnc, 'ctx: 'fnc> InBasicBlockGenerator<'fnc, 'mdl, 'ct
 					})
 					.handle_unsigned_int(&|_, value| match to {
 						ValueType::U16 => Value::U16 {
-							value: self.builder.build_int_z_extend(
+							value: in_basic_block_generator.builder.build_int_z_extend(
 								value,
-								self.in_function_generator
-									.in_module_generator
-									.generator
-									.context
-									.i16_type(),
+								self.in_module_generator.generator.context.i16_type(),
 								"CAST -> u16",
 							),
 						},
 						ValueType::U32 => Value::U32 {
-							value: self.builder.build_int_z_extend(
+							value: in_basic_block_generator.builder.build_int_z_extend(
 								value,
-								self.in_function_generator
-									.in_module_generator
-									.generator
-									.context
-									.i32_type(),
+								self.in_module_generator.generator.context.i32_type(),
 								"CAST -> u32",
 							),
 						},
 						ValueType::U64 => Value::U64 {
-							value: self.builder.build_int_z_extend(
+							value: in_basic_block_generator.builder.build_int_z_extend(
 								value,
-								self.in_function_generator
-									.in_module_generator
-									.generator
-									.context
-									.i64_type(),
+								self.in_module_generator.generator.context.i64_type(),
 								"CAST -> u64",
 							),
 						},
 						ValueType::U128 => Value::U128 {
-							value: self.builder.build_int_z_extend(
+							value: in_basic_block_generator.builder.build_int_z_extend(
 								value,
-								self.in_function_generator
-									.in_module_generator
-									.generator
-									.context
-									.i128_type(),
+								self.in_module_generator.generator.context.i128_type(),
 								"CAST -> u128",
 							),
 						},
@@ -1797,24 +1815,16 @@ impl<'a, 'fnc: 'a, 'mdl: 'fnc, 'ctx: 'fnc> InBasicBlockGenerator<'fnc, 'mdl, 'ct
 					})
 					.handle_float(&|_, value| match to {
 						ValueType::F32 => Value::F32 {
-							value: self.builder.build_float_ext(
+							value: in_basic_block_generator.builder.build_float_ext(
 								value,
-								self.in_function_generator
-									.in_module_generator
-									.generator
-									.context
-									.f32_type(),
+								self.in_module_generator.generator.context.f32_type(),
 								"CAST -> f32",
 							),
 						},
 						ValueType::F64 => Value::F64 {
-							value: self.builder.build_float_ext(
+							value: in_basic_block_generator.builder.build_float_ext(
 								value,
-								self.in_function_generator
-									.in_module_generator
-									.generator
-									.context
-									.f64_type(),
+								self.in_module_generator.generator.context.f64_type(),
 								"CAST -> f64",
 							),
 						},
@@ -1831,4 +1841,10 @@ impl<'a, 'fnc: 'a, 'mdl: 'fnc, 'ctx: 'fnc> InBasicBlockGenerator<'fnc, 'mdl, 'ct
 
 		(lhs, rhs)
 	}
+}
+
+pub struct InBasicBlockGenerator<'ctx> {
+	pub name: String,
+	pub basic_block: BasicBlock,
+	pub builder: Builder<'ctx>,
 }
