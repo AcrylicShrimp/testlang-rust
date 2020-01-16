@@ -51,13 +51,13 @@ impl<'ctx> Generator {
 		in_module_generator.new_function("rand", (ValueType::I32, vec![]), false, true);
 		in_module_generator.new_function(
 			"srand",
-			(ValueType::Void, vec![ValueType::U32]),
+			(ValueType::Void, vec![ValueType::U64]),
 			false,
 			true,
 		);
 		in_module_generator.new_function(
 			"time",
-			(ValueType::U32, vec![ValueType::I32]),
+			(ValueType::U64, vec![ValueType::U64]),
 			false,
 			true,
 		);
@@ -278,7 +278,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 			return;
 		}
 
-		// TODO: Add the local variable controll here.
+		// TODO: Add the local variable control here.
 
 		self.generate_code(&ast.children[1]);
 	}
@@ -395,13 +395,6 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 					self.generate_expression_code_op_and(ast)
 				}
 			}
-			"op-not" => {
-				if ast.children.len() == 1 {
-					self.generate_expression_code(&ast.children[0])
-				} else {
-					self.generate_expression_code_op_not(ast)
-				}
-			}
 			"op-cmp" => {
 				if ast.children.len() == 1 {
 					self.generate_expression_code(&ast.children[0])
@@ -451,11 +444,11 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 					self.generate_expression_code_op_bit_xor(ast)
 				}
 			}
-			"op-bit-not" => {
+			"op-cast" => {
 				if ast.children.len() == 1 {
 					self.generate_expression_code(&ast.children[0])
 				} else {
-					self.generate_expression_code_op_bit_not(ast)
+					self.generate_expression_code_op_cast(ast)
 				}
 			}
 			"op-single" => {
@@ -579,34 +572,6 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 		result.add_incoming(&[(&rhs.to_basic_value(), &rhs_block.basic_block)]);
 
 		Value::from_basic_value(ValueType::Bool, result.as_basic_value())
-	}
-
-	fn generate_expression_code_op_not(&'a self, ast: &AST) -> Value<'ctx> {
-		let lhs = self.generate_expression_code(&ast.children[1]);
-
-		if lhs.get_type() != ValueType::Bool {
-			panic!(
-				"type error; boolean operations are only allowed between {}s.",
-				ValueType::Bool
-			);
-		}
-
-		let lhs_block = self.last_basic_block();
-
-		let result = lhs.invoke_handler(ValueHandler::new().handle_bool(&|_, value| {
-			lhs_block.builder.build_int_compare(
-				IntPredicate::EQ,
-				value,
-				self.in_module_generator
-					.generator
-					.context
-					.bool_type()
-					.const_int(0, false),
-				"NOT",
-			)
-		}));
-
-		Value::Bool { value: result }
 	}
 
 	fn generate_expression_code_op_cmp(&'a self, ast: &AST) -> Value<'ctx> {
@@ -869,7 +834,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 		lhs = matched.0;
 		rhs = matched.1;
 
-		let op_token_type = &ast.children[1].child.as_ref().unwrap().token_type;
+		let op_token_type = ast.children[1].child.as_ref().unwrap().token_type;
 
 		lhs.invoke_handler(
 			ValueHandler::new()
@@ -1429,60 +1394,819 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 		)
 	}
 
-	fn generate_expression_code_op_bit_not(&'a self, ast: &AST) -> Value<'ctx> {
-		let lhs = self.generate_expression_code(&ast.children[1]);
+	fn generate_expression_code_op_cast(&'a self, ast: &AST) -> Value<'ctx> {
+		let cast_type = ast.children[2].children[0]
+			.child
+			.as_ref()
+			.unwrap()
+			.token_type;
 
-		match lhs.get_type() {
-			ValueType::Void
-			| ValueType::Bool
-			| ValueType::F16
-			| ValueType::F32
-			| ValueType::F64
-			| ValueType::Str => panic!(
-				"type error; bitwise operations between {}s are not allowed.",
-				lhs.get_type()
-			),
-			_ => (),
+		if cast_type == TokenType::KeywordVoid {
+			panic!(
+				"type error; unable to perform cast to {}s.",
+				ValueType::Void
+			);
 		}
 
+		let operand = self.generate_expression_code(&ast.children[0]);
 		let block = self.last_basic_block();
 
-		lhs.invoke_handler(
+		if operand.get_type() == ValueType::Void {
+			panic!(
+				"type error; unable to perform cast from {}s.",
+				ValueType::Void
+			);
+		}
+
+		operand.invoke_handler(
 			ValueHandler::new()
-				.handle_int(&|_, lhs_value| match lhs.get_type().get_bitwidth() {
-					8 => Value::I8 {
-						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+				.handle_bool(&|_, value| match cast_type {
+					TokenType::KeywordBool => operand,
+					TokenType::KeywordI8 => Value::I8 {
+						value: block.builder.build_int_z_extend(
+							value,
+							self.in_module_generator.generator.context.i8_type(),
+							"CAST -> i8",
+						),
 					},
-					16 => Value::I16 {
-						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					TokenType::KeywordI16 => Value::I16 {
+						value: block.builder.build_int_z_extend(
+							value,
+							self.in_module_generator.generator.context.i16_type(),
+							"CAST -> i16",
+						),
 					},
-					32 => Value::I32 {
-						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					TokenType::KeywordI32 => Value::I32 {
+						value: block.builder.build_int_z_extend(
+							value,
+							self.in_module_generator.generator.context.i32_type(),
+							"CAST -> i32",
+						),
 					},
-					64 => Value::I64 {
-						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					TokenType::KeywordI64 => Value::I64 {
+						value: block.builder.build_int_z_extend(
+							value,
+							self.in_module_generator.generator.context.i64_type(),
+							"CAST -> i64",
+						),
 					},
-					128 => Value::I128 {
-						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					TokenType::KeywordI128 => Value::I128 {
+						value: block.builder.build_int_z_extend(
+							value,
+							self.in_module_generator.generator.context.i128_type(),
+							"CAST -> i128",
+						),
 					},
+					TokenType::KeywordU8 => Value::U8 {
+						value: block.builder.build_int_z_extend(
+							value,
+							self.in_module_generator.generator.context.i8_type(),
+							"CAST -> u8",
+						),
+					},
+					TokenType::KeywordU16 => Value::U16 {
+						value: block.builder.build_int_z_extend(
+							value,
+							self.in_module_generator.generator.context.i16_type(),
+							"CAST -> u16",
+						),
+					},
+					TokenType::KeywordU32 => Value::U32 {
+						value: block.builder.build_int_z_extend(
+							value,
+							self.in_module_generator.generator.context.i32_type(),
+							"CAST -> u32",
+						),
+					},
+					TokenType::KeywordU64 => Value::U64 {
+						value: block.builder.build_int_z_extend(
+							value,
+							self.in_module_generator.generator.context.i64_type(),
+							"CAST -> u64",
+						),
+					},
+					TokenType::KeywordU128 => Value::U128 {
+						value: block.builder.build_int_z_extend(
+							value,
+							self.in_module_generator.generator.context.i128_type(),
+							"CAST -> u128",
+						),
+					},
+					TokenType::KeywordF16 => Value::F16 {
+						value: block.builder.build_unsigned_int_to_float(
+							value,
+							self.in_module_generator.generator.context.f16_type(),
+							"CAST -> f16",
+						),
+					},
+					TokenType::KeywordF32 => Value::F32 {
+						value: block.builder.build_unsigned_int_to_float(
+							value,
+							self.in_module_generator.generator.context.f32_type(),
+							"CAST -> f32",
+						),
+					},
+					TokenType::KeywordF64 => Value::F64 {
+						value: block.builder.build_unsigned_int_to_float(
+							value,
+							self.in_module_generator.generator.context.f64_type(),
+							"CAST -> f64",
+						),
+					},
+					TokenType::KeywordStr => panic!(
+						"type error; unable to cast {}s to {}s.",
+						ValueType::Bool,
+						ValueType::Str
+					),
 					_ => unreachable!(),
 				})
-				.handle_unsigned_int(&|_, lhs_value| match lhs.get_type().get_bitwidth() {
-					8 => Value::U8 {
-						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+				.handle_int(&|_, value| match cast_type {
+					TokenType::KeywordBool => Value::Bool {
+						value: block.builder.build_int_compare(
+							IntPredicate::NE,
+							value,
+							match operand.get_type().get_bitwidth() {
+								8 => self
+									.in_module_generator
+									.generator
+									.context
+									.i8_type()
+									.const_int(0, false),
+								16 => self
+									.in_module_generator
+									.generator
+									.context
+									.i16_type()
+									.const_int(0, false),
+								32 => self
+									.in_module_generator
+									.generator
+									.context
+									.i32_type()
+									.const_int(0, false),
+								64 => self
+									.in_module_generator
+									.generator
+									.context
+									.i64_type()
+									.const_int(0, false),
+								128 => self
+									.in_module_generator
+									.generator
+									.context
+									.i128_type()
+									.const_int(0, false),
+								_ => unreachable!(),
+							},
+							"CAST -> bool",
+						),
 					},
-					16 => Value::U16 {
-						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					TokenType::KeywordI8 => {
+						if operand.get_type().get_bitwidth() == 8 {
+							operand
+						} else {
+							Value::I8 {
+								value: block.builder.build_int_truncate(
+									value,
+									self.in_module_generator.generator.context.i8_type(),
+									"CAST -> i8",
+								),
+							}
+						}
+					}
+					TokenType::KeywordI16 => {
+						if operand.get_type().get_bitwidth() == 16 {
+							operand
+						} else if operand.get_type().get_bitwidth() < 16 {
+							Value::I16 {
+								value: block.builder.build_int_s_extend(
+									value,
+									self.in_module_generator.generator.context.i16_type(),
+									"CAST -> i16",
+								),
+							}
+						} else {
+							Value::I16 {
+								value: block.builder.build_int_truncate(
+									value,
+									self.in_module_generator.generator.context.i16_type(),
+									"CAST -> i16",
+								),
+							}
+						}
+					}
+					TokenType::KeywordI32 => {
+						if operand.get_type().get_bitwidth() == 32 {
+							operand
+						} else if operand.get_type().get_bitwidth() < 32 {
+							Value::I32 {
+								value: block.builder.build_int_s_extend(
+									value,
+									self.in_module_generator.generator.context.i32_type(),
+									"CAST -> i32",
+								),
+							}
+						} else {
+							Value::I32 {
+								value: block.builder.build_int_truncate(
+									value,
+									self.in_module_generator.generator.context.i32_type(),
+									"CAST -> i32",
+								),
+							}
+						}
+					}
+					TokenType::KeywordI64 => {
+						if operand.get_type().get_bitwidth() == 64 {
+							operand
+						} else if operand.get_type().get_bitwidth() < 64 {
+							Value::I64 {
+								value: block.builder.build_int_s_extend(
+									value,
+									self.in_module_generator.generator.context.i64_type(),
+									"CAST -> i64",
+								),
+							}
+						} else {
+							Value::I64 {
+								value: block.builder.build_int_truncate(
+									value,
+									self.in_module_generator.generator.context.i64_type(),
+									"CAST -> i64",
+								),
+							}
+						}
+					}
+					TokenType::KeywordI128 => {
+						if operand.get_type().get_bitwidth() == 128 {
+							operand
+						} else {
+							Value::I128 {
+								value: block.builder.build_int_s_extend(
+									value,
+									self.in_module_generator.generator.context.i128_type(),
+									"CAST -> i128",
+								),
+							}
+						}
+					}
+					TokenType::KeywordU8 => Value::U8 {
+						value: if operand.get_type().get_bitwidth() == 8 {
+							value
+						} else {
+							block.builder.build_int_truncate(
+								value,
+								self.in_module_generator.generator.context.i8_type(),
+								"CAST -> u8",
+							)
+						},
 					},
-					32 => Value::U32 {
-						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					TokenType::KeywordU16 => Value::U16 {
+						value: if operand.get_type().get_bitwidth() == 16 {
+							value
+						} else if operand.get_type().get_bitwidth() < 16 {
+							block.builder.build_int_s_extend(
+								value,
+								self.in_module_generator.generator.context.i16_type(),
+								"CAST -> u16",
+							)
+						} else {
+							block.builder.build_int_truncate(
+								value,
+								self.in_module_generator.generator.context.i16_type(),
+								"CAST -> u16",
+							)
+						},
 					},
-					64 => Value::U64 {
-						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					TokenType::KeywordU32 => Value::U32 {
+						value: if operand.get_type().get_bitwidth() == 32 {
+							value
+						} else if operand.get_type().get_bitwidth() < 32 {
+							block.builder.build_int_s_extend(
+								value,
+								self.in_module_generator.generator.context.i32_type(),
+								"CAST -> u32",
+							)
+						} else {
+							block.builder.build_int_truncate(
+								value,
+								self.in_module_generator.generator.context.i32_type(),
+								"CAST -> u32",
+							)
+						},
 					},
-					128 => Value::U128 {
-						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					TokenType::KeywordU64 => Value::U64 {
+						value: if operand.get_type().get_bitwidth() == 64 {
+							value
+						} else if operand.get_type().get_bitwidth() < 64 {
+							block.builder.build_int_s_extend(
+								value,
+								self.in_module_generator.generator.context.i64_type(),
+								"CAST -> u64",
+							)
+						} else {
+							block.builder.build_int_truncate(
+								value,
+								self.in_module_generator.generator.context.i64_type(),
+								"CAST -> u64",
+							)
+						},
 					},
+					TokenType::KeywordU128 => Value::U128 {
+						value: if operand.get_type().get_bitwidth() == 128 {
+							value
+						} else {
+							block.builder.build_int_s_extend(
+								value,
+								self.in_module_generator.generator.context.i128_type(),
+								"CAST -> u128",
+							)
+						},
+					},
+					TokenType::KeywordF16 => Value::F16 {
+						value: block.builder.build_signed_int_to_float(
+							value,
+							self.in_module_generator.generator.context.f16_type(),
+							"CAST -> f16",
+						),
+					},
+					TokenType::KeywordF32 => Value::F32 {
+						value: block.builder.build_signed_int_to_float(
+							value,
+							self.in_module_generator.generator.context.f32_type(),
+							"CAST -> f32",
+						),
+					},
+					TokenType::KeywordF64 => Value::F64 {
+						value: block.builder.build_signed_int_to_float(
+							value,
+							self.in_module_generator.generator.context.f64_type(),
+							"CAST -> f64",
+						),
+					},
+					TokenType::KeywordStr => panic!(
+						"type error; unable to cast {}s to {}s.",
+						operand.get_type(),
+						ValueType::Str
+					),
+					_ => unreachable!(),
+				})
+				.handle_unsigned_int(&|_, value| match cast_type {
+					TokenType::KeywordBool => Value::Bool {
+						value: block.builder.build_int_compare(
+							IntPredicate::NE,
+							value,
+							match operand.get_type().get_bitwidth() {
+								8 => self
+									.in_module_generator
+									.generator
+									.context
+									.i8_type()
+									.const_int(0, false),
+								16 => self
+									.in_module_generator
+									.generator
+									.context
+									.i16_type()
+									.const_int(0, false),
+								32 => self
+									.in_module_generator
+									.generator
+									.context
+									.i32_type()
+									.const_int(0, false),
+								64 => self
+									.in_module_generator
+									.generator
+									.context
+									.i64_type()
+									.const_int(0, false),
+								128 => self
+									.in_module_generator
+									.generator
+									.context
+									.i128_type()
+									.const_int(0, false),
+								_ => unreachable!(),
+							},
+							"CAST -> bool",
+						),
+					},
+					TokenType::KeywordI8 => Value::I8 {
+						value: if operand.get_type().get_bitwidth() == 8 {
+							value
+						} else {
+							block.builder.build_int_truncate(
+								value,
+								self.in_module_generator.generator.context.i8_type(),
+								"CAST -> u8",
+							)
+						},
+					},
+					TokenType::KeywordI16 => Value::I16 {
+						value: if operand.get_type().get_bitwidth() == 16 {
+							value
+						} else if operand.get_type().get_bitwidth() < 16 {
+							block.builder.build_int_z_extend(
+								value,
+								self.in_module_generator.generator.context.i16_type(),
+								"CAST -> i16",
+							)
+						} else {
+							block.builder.build_int_truncate(
+								value,
+								self.in_module_generator.generator.context.i16_type(),
+								"CAST -> i16",
+							)
+						},
+					},
+					TokenType::KeywordI32 => Value::I32 {
+						value: if operand.get_type().get_bitwidth() == 32 {
+							value
+						} else if operand.get_type().get_bitwidth() < 32 {
+							block.builder.build_int_z_extend(
+								value,
+								self.in_module_generator.generator.context.i32_type(),
+								"CAST -> i32",
+							)
+						} else {
+							block.builder.build_int_truncate(
+								value,
+								self.in_module_generator.generator.context.i32_type(),
+								"CAST -> i32",
+							)
+						},
+					},
+					TokenType::KeywordI64 => Value::I64 {
+						value: if operand.get_type().get_bitwidth() == 64 {
+							value
+						} else if operand.get_type().get_bitwidth() < 64 {
+							block.builder.build_int_z_extend(
+								value,
+								self.in_module_generator.generator.context.i64_type(),
+								"CAST -> i64",
+							)
+						} else {
+							block.builder.build_int_truncate(
+								value,
+								self.in_module_generator.generator.context.i64_type(),
+								"CAST -> i64",
+							)
+						},
+					},
+					TokenType::KeywordI128 => Value::I128 {
+						value: if operand.get_type().get_bitwidth() == 128 {
+							value
+						} else {
+							block.builder.build_int_z_extend(
+								value,
+								self.in_module_generator.generator.context.i128_type(),
+								"CAST -> i128",
+							)
+						},
+					},
+					TokenType::KeywordU8 => {
+						if operand.get_type().get_bitwidth() == 8 {
+							operand
+						} else {
+							Value::U8 {
+								value: block.builder.build_int_truncate(
+									value,
+									self.in_module_generator.generator.context.i8_type(),
+									"CAST -> u8",
+								),
+							}
+						}
+					}
+					TokenType::KeywordU16 => {
+						if operand.get_type().get_bitwidth() == 16 {
+							operand
+						} else if operand.get_type().get_bitwidth() < 16 {
+							Value::U16 {
+								value: block.builder.build_int_s_extend(
+									value,
+									self.in_module_generator.generator.context.i16_type(),
+									"CAST -> u16",
+								),
+							}
+						} else {
+							Value::U16 {
+								value: block.builder.build_int_truncate(
+									value,
+									self.in_module_generator.generator.context.i16_type(),
+									"CAST -> u16",
+								),
+							}
+						}
+					}
+					TokenType::KeywordU32 => {
+						if operand.get_type().get_bitwidth() == 32 {
+							operand
+						} else if operand.get_type().get_bitwidth() < 32 {
+							Value::U32 {
+								value: block.builder.build_int_s_extend(
+									value,
+									self.in_module_generator.generator.context.i32_type(),
+									"CAST -> u32",
+								),
+							}
+						} else {
+							Value::U32 {
+								value: block.builder.build_int_truncate(
+									value,
+									self.in_module_generator.generator.context.i32_type(),
+									"CAST -> u32",
+								),
+							}
+						}
+					}
+					TokenType::KeywordU64 => {
+						if operand.get_type().get_bitwidth() == 64 {
+							operand
+						} else if operand.get_type().get_bitwidth() < 64 {
+							Value::U64 {
+								value: block.builder.build_int_s_extend(
+									value,
+									self.in_module_generator.generator.context.i64_type(),
+									"CAST -> u64",
+								),
+							}
+						} else {
+							Value::U64 {
+								value: block.builder.build_int_truncate(
+									value,
+									self.in_module_generator.generator.context.i64_type(),
+									"CAST -> u64",
+								),
+							}
+						}
+					}
+					TokenType::KeywordU128 => {
+						if operand.get_type().get_bitwidth() == 128 {
+							operand
+						} else {
+							Value::U128 {
+								value: block.builder.build_int_s_extend(
+									value,
+									self.in_module_generator.generator.context.i128_type(),
+									"CAST -> u128",
+								),
+							}
+						}
+					}
+					TokenType::KeywordF16 => Value::F16 {
+						value: block.builder.build_unsigned_int_to_float(
+							value,
+							self.in_module_generator.generator.context.f16_type(),
+							"CAST -> f16",
+						),
+					},
+					TokenType::KeywordF32 => Value::F32 {
+						value: block.builder.build_unsigned_int_to_float(
+							value,
+							self.in_module_generator.generator.context.f32_type(),
+							"CAST -> f32",
+						),
+					},
+					TokenType::KeywordF64 => Value::F64 {
+						value: block.builder.build_unsigned_int_to_float(
+							value,
+							self.in_module_generator.generator.context.f64_type(),
+							"CAST -> f64",
+						),
+					},
+					TokenType::KeywordStr => panic!(
+						"type error; unable to cast {}s to {}s.",
+						operand.get_type(),
+						ValueType::Str
+					),
+					_ => unreachable!(),
+				})
+				.handle_float(&|_, value| match cast_type {
+					TokenType::KeywordBool => Value::Bool {
+						value: block.builder.build_float_compare(
+							FloatPredicate::ONE,
+							value,
+							match operand.get_type().get_bitwidth() {
+								16 => self
+									.in_module_generator
+									.generator
+									.context
+									.f16_type()
+									.const_float(0.0),
+								32 => self
+									.in_module_generator
+									.generator
+									.context
+									.f32_type()
+									.const_float(0.0),
+								64 => self
+									.in_module_generator
+									.generator
+									.context
+									.f64_type()
+									.const_float(0.0),
+								_ => unreachable!(),
+							},
+							"CAST -> bool",
+						),
+					},
+					TokenType::KeywordI8 => Value::I8 {
+						value: block.builder.build_float_to_signed_int(
+							value,
+							self.in_module_generator.generator.context.i8_type(),
+							"CAST -> i8",
+						),
+					},
+					TokenType::KeywordI16 => Value::I16 {
+						value: block.builder.build_float_to_signed_int(
+							value,
+							self.in_module_generator.generator.context.i16_type(),
+							"CAST -> i16",
+						),
+					},
+					TokenType::KeywordI32 => Value::I32 {
+						value: block.builder.build_float_to_signed_int(
+							value,
+							self.in_module_generator.generator.context.i32_type(),
+							"CAST -> i32",
+						),
+					},
+					TokenType::KeywordI64 => Value::I64 {
+						value: block.builder.build_float_to_signed_int(
+							value,
+							self.in_module_generator.generator.context.i64_type(),
+							"CAST -> i64",
+						),
+					},
+					TokenType::KeywordI128 => Value::I128 {
+						value: block.builder.build_float_to_signed_int(
+							value,
+							self.in_module_generator.generator.context.i128_type(),
+							"CAST -> i128",
+						),
+					},
+					TokenType::KeywordU8 => Value::U8 {
+						value: block.builder.build_float_to_unsigned_int(
+							value,
+							self.in_module_generator.generator.context.i8_type(),
+							"CAST -> u8",
+						),
+					},
+					TokenType::KeywordU16 => Value::U16 {
+						value: block.builder.build_float_to_unsigned_int(
+							value,
+							self.in_module_generator.generator.context.i16_type(),
+							"CAST -> u16",
+						),
+					},
+					TokenType::KeywordU32 => Value::U32 {
+						value: block.builder.build_float_to_unsigned_int(
+							value,
+							self.in_module_generator.generator.context.i32_type(),
+							"CAST -> u32",
+						),
+					},
+					TokenType::KeywordU64 => Value::U64 {
+						value: block.builder.build_float_to_unsigned_int(
+							value,
+							self.in_module_generator.generator.context.i64_type(),
+							"CAST -> u64",
+						),
+					},
+					TokenType::KeywordU128 => Value::U128 {
+						value: block.builder.build_float_to_unsigned_int(
+							value,
+							self.in_module_generator.generator.context.i128_type(),
+							"CAST -> u128",
+						),
+					},
+					TokenType::KeywordF16 => {
+						if operand.get_type().get_bitwidth() == 16 {
+							operand
+						} else {
+							Value::F16 {
+								value: block.builder.build_float_trunc(
+									value,
+									self.in_module_generator.generator.context.f16_type(),
+									"CAST -> f16",
+								),
+							}
+						}
+					}
+					TokenType::KeywordF32 => {
+						if operand.get_type().get_bitwidth() == 32 {
+							operand
+						} else if operand.get_type().get_bitwidth() < 32 {
+							Value::F32 {
+								value: block.builder.build_float_ext(
+									value,
+									self.in_module_generator.generator.context.f32_type(),
+									"CAST -> f32",
+								),
+							}
+						} else {
+							Value::F32 {
+								value: block.builder.build_float_trunc(
+									value,
+									self.in_module_generator.generator.context.f32_type(),
+									"CAST -> f32",
+								),
+							}
+						}
+					}
+					TokenType::KeywordF64 => {
+						if operand.get_type().get_bitwidth() == 64 {
+							operand
+						} else {
+							Value::F64 {
+								value: block.builder.build_float_ext(
+									value,
+									self.in_module_generator.generator.context.f64_type(),
+									"CAST -> f64",
+								),
+							}
+						}
+					}
+					TokenType::KeywordStr => panic!(
+						"type error; unable to cast {}s to {}s.",
+						operand.get_type(),
+						ValueType::Str
+					),
+					_ => unreachable!(),
+				})
+				.handle_str(&|_, _| match cast_type {
+					TokenType::KeywordBool => panic!(
+						"type error; unable to cast {}s to {}s.",
+						operand.get_type(),
+						ValueType::Bool
+					),
+					TokenType::KeywordI8 => panic!(
+						"type error; unable to cast {}s to {}s.",
+						operand.get_type(),
+						ValueType::I8
+					),
+					TokenType::KeywordI16 => panic!(
+						"type error; unable to cast {}s to {}s.",
+						operand.get_type(),
+						ValueType::I16
+					),
+					TokenType::KeywordI32 => panic!(
+						"type error; unable to cast {}s to {}s.",
+						operand.get_type(),
+						ValueType::I32
+					),
+					TokenType::KeywordI64 => panic!(
+						"type error; unable to cast {}s to {}s.",
+						operand.get_type(),
+						ValueType::I64
+					),
+					TokenType::KeywordI128 => panic!(
+						"type error; unable to cast {}s to {}s.",
+						operand.get_type(),
+						ValueType::I128
+					),
+					TokenType::KeywordU8 => panic!(
+						"type error; unable to cast {}s to {}s.",
+						operand.get_type(),
+						ValueType::U8
+					),
+					TokenType::KeywordU16 => panic!(
+						"type error; unable to cast {}s to {}s.",
+						operand.get_type(),
+						ValueType::U16
+					),
+					TokenType::KeywordU32 => panic!(
+						"type error; unable to cast {}s to {}s.",
+						operand.get_type(),
+						ValueType::U32
+					),
+					TokenType::KeywordU64 => panic!(
+						"type error; unable to cast {}s to {}s.",
+						operand.get_type(),
+						ValueType::U64
+					),
+					TokenType::KeywordU128 => panic!(
+						"type error; unable to cast {}s to {}s.",
+						operand.get_type(),
+						ValueType::U128
+					),
+					TokenType::KeywordF16 => panic!(
+						"type error; unable to cast {}s to {}s.",
+						operand.get_type(),
+						ValueType::F16
+					),
+					TokenType::KeywordF32 => panic!(
+						"type error; unable to cast {}s to {}s.",
+						operand.get_type(),
+						ValueType::F32
+					),
+					TokenType::KeywordF64 => panic!(
+						"type error; unable to cast {}s to {}s.",
+						operand.get_type(),
+						ValueType::F64
+					),
+					TokenType::KeywordStr => operand,
 					_ => unreachable!(),
 				}),
 		)
@@ -1493,7 +2217,9 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 			TokenType::KeywordFrom => unimplemented!(), // TODO: Implement the from syntax.
 			TokenType::ParenL => self.generate_expression_code(&ast.children[1]),
 			TokenType::OpAdd => self.generate_expression_code(&ast.children[1]),
-			TokenType::OpSub => self.generate_expression_code_op_neg(&ast.children[1]),
+			TokenType::OpSub => self.generate_expression_code_op_neg(&ast),
+			TokenType::OpNot => self.generate_expression_code_op_not(&ast),
+			TokenType::OpBitNot => self.generate_expression_code_op_bit_not(&ast),
 			_ => unreachable!(),
 		}
 	}
@@ -1587,6 +2313,93 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 					},
 					64 => Value::F64 {
 						value: block.builder.build_float_neg(lhs_value, "NEG"),
+					},
+					_ => unreachable!(),
+				}),
+		)
+	}
+
+	fn generate_expression_code_op_not(&'a self, ast: &AST) -> Value<'ctx> {
+		let lhs = self.generate_expression_code(&ast.children[1]);
+
+		if lhs.get_type() != ValueType::Bool {
+			panic!(
+				"type error; boolean operations are only allowed between {}s.",
+				ValueType::Bool
+			);
+		}
+
+		let lhs_block = self.last_basic_block();
+
+		let result = lhs.invoke_handler(ValueHandler::new().handle_bool(&|_, value| {
+			lhs_block.builder.build_int_compare(
+				IntPredicate::EQ,
+				value,
+				self.in_module_generator
+					.generator
+					.context
+					.bool_type()
+					.const_int(0, false),
+				"NOT",
+			)
+		}));
+
+		Value::Bool { value: result }
+	}
+
+	fn generate_expression_code_op_bit_not(&'a self, ast: &AST) -> Value<'ctx> {
+		let lhs = self.generate_expression_code(&ast.children[1]);
+
+		match lhs.get_type() {
+			ValueType::Void
+			| ValueType::Bool
+			| ValueType::F16
+			| ValueType::F32
+			| ValueType::F64
+			| ValueType::Str => panic!(
+				"type error; bitwise operations between {}s are not allowed.",
+				lhs.get_type()
+			),
+			_ => (),
+		}
+
+		let block = self.last_basic_block();
+
+		lhs.invoke_handler(
+			ValueHandler::new()
+				.handle_int(&|_, lhs_value| match lhs.get_type().get_bitwidth() {
+					8 => Value::I8 {
+						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					},
+					16 => Value::I16 {
+						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					},
+					32 => Value::I32 {
+						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					},
+					64 => Value::I64 {
+						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					},
+					128 => Value::I128 {
+						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					},
+					_ => unreachable!(),
+				})
+				.handle_unsigned_int(&|_, lhs_value| match lhs.get_type().get_bitwidth() {
+					8 => Value::U8 {
+						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					},
+					16 => Value::U16 {
+						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					},
+					32 => Value::U32 {
+						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					},
+					64 => Value::U64 {
+						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
+					},
+					128 => Value::U128 {
+						value: block.builder.build_not(lhs_value, "BITWISE NOT"),
 					},
 					_ => unreachable!(),
 				}),
@@ -1717,8 +2530,10 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 					.context
 					.i32_type()
 					.const_int(
-						if content.starts_with("-") {
+						if content.starts_with("+") {
 							content[1..].parse::<u64>().unwrap()
+						} else if content.starts_with("-") {
+							!content[1..].parse::<u64>().unwrap() + 1
 						} else {
 							content.parse::<u64>().unwrap()
 						},

@@ -39,8 +39,22 @@ ret-statement: KeywordRet @expression;
 let-statement: KeywordLet Id OpAssign @expression;
 let-statement: KeywordLet Id @type OpAssign @expression;
 
-type: TypeIdInt;
-type: TypeIdInt;
+type: KeywordVoid;
+type: KeywordBool;
+type: KeywordI8;
+type: KeywordI16;
+type: KeywordI32;
+type: KeywordI64;
+type: KeywordI128;
+type: KeywordU8;
+type: KeywordU16;
+type: KeywordU32;
+type: KeywordU64;
+type: KeywordU128;
+type: KeywordF16;
+type: KeywordF32;
+type: KeywordF64;
+type: KeywordStr;
 
 expression: @assignment;
 
@@ -61,11 +75,8 @@ assignment: @left-value OpAssignShiftR @assignment;
 op-or: @op-and;
 op-or: @op-or OpOr @op-and;
 
-op-and: @op-not;
-op-and: @op-and OpAnd @op-not;
-
-op-not: @op-cmp;
-op-not: OpNot @op-not;
+op-and: @op-cmp;
+op-and: @op-and OpAnd @op-cmp;
 
 op-cmp: @op-addsub;
 op-cmp: @op-cmp OpEq @op-addsub;
@@ -94,16 +105,18 @@ op-bit-or: @op-bit-or OpBitOr @op-bit-and;
 op-bit-and: @op-bit-xor;
 op-bit-and: @op-bit-and OpBitAnd @op-bit-xor;
 
-op-bit-xor: @op-bit-not;
-op-bit-xor: @op-bit-and OpBitXor @op-bit-not;
+op-bit-xor: @op-cast;
+op-bit-xor: @op-bit-and OpBitXor @op-cast;
 
-op-bit-not: @op-single;
-op-bit-not: OpBitNot @op-bit-not;
+op-cast: @op-single;
+op-cast: @op-cast KeywordAs @type;
 
 op-single: KeywordFrom @scope-statement;
 op-single: ParenL @expression ParenR;
 op-single: OpAdd @op-single;
 op-single: OpSub @op-single;
+op-single: OpNot @op-single;
+op-single: OpBitNot @op-single;
 op-single: @function-call;
 op-single: @left-value;
 op-single: @literal;

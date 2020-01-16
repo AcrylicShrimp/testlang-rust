@@ -12,7 +12,7 @@ enum AdvanceMode {
 	NoAdvance,
 }
 
-#[derive(PartialEq, Display, EnumString, Debug)]
+#[derive(PartialEq, Display, EnumString, Debug, Clone, Copy)]
 pub enum TokenType {
 	Unknown,
 	Eof,
@@ -66,6 +66,7 @@ pub enum TokenType {
 	OpAssignBitNot, // ~=
 	OpAssignShiftL, // <<=
 	OpAssignShiftR, // >>=
+	KeywordAs,      // as
 	KeywordLet,     // let
 	KeywordRet,     // ret
 	KeywordIf,      // if
@@ -74,6 +75,8 @@ pub enum TokenType {
 	KeywordIn,      // in
 	KeywordFrom,    // from
 	KeywordWith,    // with
+	KeywordVoid,    // void
+	KeywordBool,    // bool
 	KeywordI8,      // i8
 	KeywordI16,     // i16
 	KeywordI32,     // i32
@@ -87,6 +90,7 @@ pub enum TokenType {
 	KeywordF16,     // f16
 	KeywordF32,     // f32
 	KeywordF64,     // f64
+	KeywordStr,     // str
 }
 
 #[derive(Debug)]
@@ -619,6 +623,7 @@ impl Lexer {
 			"or" => return_token(TokenType::OpOr, content),
 			"and" => return_token(TokenType::OpAnd, content),
 			"not" => return_token(TokenType::OpNot, content),
+			"as" => return_token(TokenType::KeywordAs, content),
 			"let" => return_token(TokenType::KeywordLet, content),
 			"ret" => return_token(TokenType::KeywordRet, content),
 			"if" => return_token(TokenType::KeywordIf, content),
@@ -627,6 +632,8 @@ impl Lexer {
 			"in" => return_token(TokenType::KeywordIn, content),
 			"from" => return_token(TokenType::KeywordFrom, content),
 			"with" => return_token(TokenType::KeywordWith, content),
+			"void" => return_token(TokenType::KeywordVoid, content),
+			"bool" => return_token(TokenType::KeywordBool, content),
 			"i8" => return_token(TokenType::KeywordI8, content),
 			"i16" => return_token(TokenType::KeywordI16, content),
 			"i32" => return_token(TokenType::KeywordI32, content),
@@ -640,6 +647,7 @@ impl Lexer {
 			"f16" => return_token(TokenType::KeywordF16, content),
 			"f32" => return_token(TokenType::KeywordF32, content),
 			"f64" => return_token(TokenType::KeywordF64, content),
+			"str" => return_token(TokenType::KeywordStr, content),
 			_ => return_token(TokenType::Id, content),
 		}
 	}
