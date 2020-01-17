@@ -38,7 +38,10 @@ impl<'ctx> Generator {
 		let module = self.context.create_module(name);
 		let intrinsic_function_stacksave = module.add_function(
 			"llvm.stacksave",
-			self.context.i8_type().fn_type(Vec::new().as_slice(), false),
+			self.context
+				.i8_type()
+				.ptr_type(AddressSpace::Generic)
+				.fn_type(Vec::new().as_slice(), false),
 			None,
 		);
 		let intrinsic_function_stackrestore = module.add_function(
@@ -145,7 +148,7 @@ impl<'a, 'ctx: 'a> InModuleGenerator<'ctx> {
 			name: name.to_owned(),
 			function: function,
 			mdl_gen: self,
-			variable_table: HashMap::new(),
+			variable_table_list: vec![HashMap::new()],
 		}
 	}
 
@@ -186,11 +189,13 @@ pub struct InFunctionGenerator<'mdl, 'ctx> {
 	pub name: String,
 	pub function: FunctionValue<'ctx>,
 	pub mdl_gen: &'mdl InModuleGenerator<'ctx>,
-	pub variable_table: HashMap<String, (ValueType, PointerValue<'ctx>)>,
+	pub variable_table_list: Vec<HashMap<String, (ValueType, PointerValue<'ctx>)>>,
 }
 
 impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 	pub fn new_scope(&'a mut self) -> InScopeGenerator<'ctx> {
+		self.variable_table_list.push(HashMap::new());
+
 		let initial_stack = Value::from_basic_value(
 			ValueType::Str,
 			match self
@@ -208,11 +213,9 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 			},
 		)
 		.invoke_handler(ValueHandler::new().handle_str(&|_, value| value));
-		let initial_variable_table = self.variable_table.clone();
 
 		InScopeGenerator {
 			initial_stack: initial_stack,
-			initial_variable_table: initial_variable_table,
 		}
 	}
 
@@ -251,7 +254,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 		name: String,
 		value_type: ValueType,
 	) -> PointerValue<'ctx> {
-		if self.variable_table.contains_key(&name) {
+		if self.variable_table_list.last().unwrap().contains_key(&name) {
 			panic!(
 				"multiple variable definition detected; {} is already defined.",
 				name
@@ -263,7 +266,9 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 			&name,
 		);
 
-		self.variable_table
+		self.variable_table_list
+			.last_mut()
+			.unwrap()
 			.insert(name, (value_type, variable_address));
 
 		variable_address
@@ -2499,18 +2504,22 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 		let variable_name = &ast.children[0].child.as_ref().unwrap().token_content;
 		let basic_block = self.last_basic_block();
 
-		match self.variable_table.get(variable_name) {
-			Some((value_type, address)) => Value::from_basic_value(
-				*value_type,
-				basic_block.builder.build_load(*address, "LOAD"),
-			),
-			None => {
-				panic!(
-					"undefined variable detected; {} is not defined in current scope.",
-					variable_name
-				);
+		for variable_table in self.variable_table_list.iter().rev() {
+			match variable_table.get(variable_name) {
+				Some((value_type, address)) => {
+					return Value::from_basic_value(
+						*value_type,
+						basic_block.builder.build_load(*address, "LOAD"),
+					);
+				}
+				None => {}
 			}
 		}
+
+		panic!(
+			"undefined variable detected; {} is not defined",
+			variable_name
+		);
 	}
 
 	fn generate_expression_code_literal(&'a self, ast: &AST) -> Value<'ctx> {
@@ -2672,7 +2681,6 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 
 pub struct InScopeGenerator<'ctx> {
 	pub initial_stack: PointerValue<'ctx>,
-	pub initial_variable_table: HashMap<String, (ValueType, PointerValue<'ctx>)>,
 }
 
 impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> InScopeGenerator<'ctx> {
@@ -2682,7 +2690,8 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> InScopeGenerator<'ctx> {
 			vec![BasicValueEnum::PointerValue(self.initial_stack)].as_slice(),
 			"@llvm.stackrestore",
 		);
-		fnc_gen.variable_table = self.initial_variable_table;
+
+		fnc_gen.variable_table_list.pop();
 	}
 }
 
