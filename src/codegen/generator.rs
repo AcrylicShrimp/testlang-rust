@@ -15,6 +15,7 @@ use inkwell::types::BasicTypeEnum;
 use inkwell::values::BasicValueEnum;
 use inkwell::values::FunctionValue;
 use inkwell::values::PointerValue;
+use inkwell::AddressSpace;
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 use inkwell::OptimizationLevel;
@@ -28,41 +29,51 @@ pub struct Generator {
 
 impl<'ctx> Generator {
 	pub fn new() -> Generator {
-		let context = Context::create();
-
-		Generator { context: context }
+		Generator {
+			context: Context::create(),
+		}
 	}
 
 	pub fn new_module(&'ctx self, name: &str) -> InModuleGenerator<'ctx> {
-		let mut in_module_generator = InModuleGenerator {
+		let module = self.context.create_module(name);
+		let intrinsic_function_stacksave = module.add_function(
+			"llvm.stacksave",
+			self.context.i8_type().fn_type(Vec::new().as_slice(), false),
+			None,
+		);
+		let intrinsic_function_stackrestore = module.add_function(
+			"llvm.stackrestore",
+			self.context.void_type().fn_type(
+				vec![BasicTypeEnum::PointerType(
+					self.context.i8_type().ptr_type(AddressSpace::Generic),
+				)]
+				.as_slice(),
+				false,
+			),
+			None,
+		);
+
+		let mut mdl_gen = InModuleGenerator {
 			generator: self,
 			name: name.to_owned(),
-			module: self.context.create_module(name),
+			module: module,
 			function_table: HashMap::new(),
+			intrinsic_function_stacksave: intrinsic_function_stacksave,
+			intrinsic_function_stackrestore: intrinsic_function_stackrestore,
 		};
 
 		// DELETEME: Declare some C library function prototypes.
-		in_module_generator.new_function(
-			"printf",
-			(ValueType::I32, vec![ValueType::Str]),
-			true,
-			true,
-		);
-		in_module_generator.new_function("rand", (ValueType::I32, vec![]), false, true);
-		in_module_generator.new_function(
+		mdl_gen.new_function("printf", (ValueType::I32, vec![ValueType::Str]), true, true);
+		mdl_gen.new_function("rand", (ValueType::I32, vec![]), false, true);
+		mdl_gen.new_function(
 			"srand",
 			(ValueType::Void, vec![ValueType::U64]),
 			false,
 			true,
 		);
-		in_module_generator.new_function(
-			"time",
-			(ValueType::U64, vec![ValueType::U64]),
-			false,
-			true,
-		);
+		mdl_gen.new_function("time", (ValueType::U64, vec![ValueType::U64]), false, true);
 
-		in_module_generator
+		mdl_gen
 	}
 }
 
@@ -71,6 +82,9 @@ pub struct InModuleGenerator<'ctx> {
 	pub name: String,
 	pub module: Module<'ctx>,
 	pub function_table: HashMap<String, (ValueType, Vec<ValueType>, bool, FunctionValue<'ctx>)>,
+	// TODO: Add a exported function table here, to mark functions as visible from outside of the module.
+	pub intrinsic_function_stacksave: FunctionValue<'ctx>,
+	pub intrinsic_function_stackrestore: FunctionValue<'ctx>,
 }
 
 impl<'a, 'ctx: 'a> InModuleGenerator<'ctx> {
@@ -130,7 +144,7 @@ impl<'a, 'ctx: 'a> InModuleGenerator<'ctx> {
 		InFunctionGenerator {
 			name: name.to_owned(),
 			function: function,
-			in_module_generator: self,
+			mdl_gen: self,
 			variable_table: HashMap::new(),
 		}
 	}
@@ -171,19 +185,44 @@ impl<'a, 'ctx: 'a> InModuleGenerator<'ctx> {
 pub struct InFunctionGenerator<'mdl, 'ctx> {
 	pub name: String,
 	pub function: FunctionValue<'ctx>,
-	pub in_module_generator: &'mdl InModuleGenerator<'ctx>,
-	// TODO: Create a scope generator and move below variable table to that.
+	pub mdl_gen: &'mdl InModuleGenerator<'ctx>,
 	pub variable_table: HashMap<String, (ValueType, PointerValue<'ctx>)>,
 }
 
 impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
+	pub fn new_scope(&'a mut self) -> InScopeGenerator<'ctx> {
+		let initial_stack = Value::from_basic_value(
+			ValueType::Str,
+			match self
+				.last_basic_block()
+				.builder
+				.build_call(
+					self.mdl_gen.intrinsic_function_stacksave,
+					Vec::new().as_slice(),
+					"@llvm.stacksave",
+				)
+				.try_as_basic_value()
+			{
+				Either::Left(value) => value,
+				Either::Right(_) => unreachable!(),
+			},
+		)
+		.invoke_handler(ValueHandler::new().handle_str(&|_, value| value));
+		let initial_variable_table = self.variable_table.clone();
+
+		InScopeGenerator {
+			initial_stack: initial_stack,
+			initial_variable_table: initial_variable_table,
+		}
+	}
+
 	pub fn new_basic_block(&'a self, name: &str) -> InBasicBlockGenerator<'ctx> {
 		let basic_block = self
-			.in_module_generator
+			.mdl_gen
 			.generator
 			.context
 			.append_basic_block(self.function, name);
-		let builder = self.in_module_generator.generator.context.create_builder();
+		let builder = self.mdl_gen.generator.context.create_builder();
 
 		builder.position_at_end(&basic_block);
 
@@ -196,7 +235,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 
 	pub fn last_basic_block(&'a self) -> InBasicBlockGenerator<'ctx> {
 		let basic_block = self.function.get_last_basic_block().unwrap();
-		let builder = self.in_module_generator.generator.context.create_builder();
+		let builder = self.mdl_gen.generator.context.create_builder();
 
 		builder.position_at_end(&basic_block);
 
@@ -220,7 +259,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 		}
 
 		let variable_address = self.last_basic_block().builder.build_alloca(
-			value_type.to_basic_type(&self.in_module_generator.generator.context),
+			value_type.to_basic_type(&self.mdl_gen.generator.context),
 			&name,
 		);
 
@@ -278,9 +317,9 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 			return;
 		}
 
-		// TODO: Add the local variable control here.
-
+		let scope = self.new_scope();
 		self.generate_code(&ast.children[1]);
+		scope.end_scope(self);
 	}
 
 	fn generate_statement_code_if(&'a mut self, ast: &AST) {
@@ -511,11 +550,11 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 
 		let result = end_block
 			.builder
-			.build_phi(self.in_module_generator.generator.context.bool_type(), "OR");
+			.build_phi(self.mdl_gen.generator.context.bool_type(), "OR");
 
 		result.add_incoming(&[(
 			&self
-				.in_module_generator
+				.mdl_gen
 				.generator
 				.context
 				.bool_type()
@@ -555,14 +594,13 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 			.builder
 			.build_unconditional_branch(&end_block.basic_block);
 
-		let result = end_block.builder.build_phi(
-			self.in_module_generator.generator.context.bool_type(),
-			"AND",
-		);
+		let result = end_block
+			.builder
+			.build_phi(self.mdl_gen.generator.context.bool_type(), "AND");
 
 		result.add_incoming(&[(
 			&self
-				.in_module_generator
+				.mdl_gen
 				.generator
 				.context
 				.bool_type()
@@ -1425,91 +1463,91 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 					TokenType::KeywordI8 => Value::I8 {
 						value: block.builder.build_int_z_extend(
 							value,
-							self.in_module_generator.generator.context.i8_type(),
+							self.mdl_gen.generator.context.i8_type(),
 							"CAST -> i8",
 						),
 					},
 					TokenType::KeywordI16 => Value::I16 {
 						value: block.builder.build_int_z_extend(
 							value,
-							self.in_module_generator.generator.context.i16_type(),
+							self.mdl_gen.generator.context.i16_type(),
 							"CAST -> i16",
 						),
 					},
 					TokenType::KeywordI32 => Value::I32 {
 						value: block.builder.build_int_z_extend(
 							value,
-							self.in_module_generator.generator.context.i32_type(),
+							self.mdl_gen.generator.context.i32_type(),
 							"CAST -> i32",
 						),
 					},
 					TokenType::KeywordI64 => Value::I64 {
 						value: block.builder.build_int_z_extend(
 							value,
-							self.in_module_generator.generator.context.i64_type(),
+							self.mdl_gen.generator.context.i64_type(),
 							"CAST -> i64",
 						),
 					},
 					TokenType::KeywordI128 => Value::I128 {
 						value: block.builder.build_int_z_extend(
 							value,
-							self.in_module_generator.generator.context.i128_type(),
+							self.mdl_gen.generator.context.i128_type(),
 							"CAST -> i128",
 						),
 					},
 					TokenType::KeywordU8 => Value::U8 {
 						value: block.builder.build_int_z_extend(
 							value,
-							self.in_module_generator.generator.context.i8_type(),
+							self.mdl_gen.generator.context.i8_type(),
 							"CAST -> u8",
 						),
 					},
 					TokenType::KeywordU16 => Value::U16 {
 						value: block.builder.build_int_z_extend(
 							value,
-							self.in_module_generator.generator.context.i16_type(),
+							self.mdl_gen.generator.context.i16_type(),
 							"CAST -> u16",
 						),
 					},
 					TokenType::KeywordU32 => Value::U32 {
 						value: block.builder.build_int_z_extend(
 							value,
-							self.in_module_generator.generator.context.i32_type(),
+							self.mdl_gen.generator.context.i32_type(),
 							"CAST -> u32",
 						),
 					},
 					TokenType::KeywordU64 => Value::U64 {
 						value: block.builder.build_int_z_extend(
 							value,
-							self.in_module_generator.generator.context.i64_type(),
+							self.mdl_gen.generator.context.i64_type(),
 							"CAST -> u64",
 						),
 					},
 					TokenType::KeywordU128 => Value::U128 {
 						value: block.builder.build_int_z_extend(
 							value,
-							self.in_module_generator.generator.context.i128_type(),
+							self.mdl_gen.generator.context.i128_type(),
 							"CAST -> u128",
 						),
 					},
 					TokenType::KeywordF16 => Value::F16 {
 						value: block.builder.build_unsigned_int_to_float(
 							value,
-							self.in_module_generator.generator.context.f16_type(),
+							self.mdl_gen.generator.context.f16_type(),
 							"CAST -> f16",
 						),
 					},
 					TokenType::KeywordF32 => Value::F32 {
 						value: block.builder.build_unsigned_int_to_float(
 							value,
-							self.in_module_generator.generator.context.f32_type(),
+							self.mdl_gen.generator.context.f32_type(),
 							"CAST -> f32",
 						),
 					},
 					TokenType::KeywordF64 => Value::F64 {
 						value: block.builder.build_unsigned_int_to_float(
 							value,
-							self.in_module_generator.generator.context.f64_type(),
+							self.mdl_gen.generator.context.f64_type(),
 							"CAST -> f64",
 						),
 					},
@@ -1526,32 +1564,27 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							IntPredicate::NE,
 							value,
 							match operand.get_type().get_bitwidth() {
-								8 => self
-									.in_module_generator
-									.generator
-									.context
-									.i8_type()
-									.const_int(0, false),
+								8 => self.mdl_gen.generator.context.i8_type().const_int(0, false),
 								16 => self
-									.in_module_generator
+									.mdl_gen
 									.generator
 									.context
 									.i16_type()
 									.const_int(0, false),
 								32 => self
-									.in_module_generator
+									.mdl_gen
 									.generator
 									.context
 									.i32_type()
 									.const_int(0, false),
 								64 => self
-									.in_module_generator
+									.mdl_gen
 									.generator
 									.context
 									.i64_type()
 									.const_int(0, false),
 								128 => self
-									.in_module_generator
+									.mdl_gen
 									.generator
 									.context
 									.i128_type()
@@ -1568,7 +1601,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							Value::I8 {
 								value: block.builder.build_int_truncate(
 									value,
-									self.in_module_generator.generator.context.i8_type(),
+									self.mdl_gen.generator.context.i8_type(),
 									"CAST -> i8",
 								),
 							}
@@ -1581,7 +1614,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							Value::I16 {
 								value: block.builder.build_int_s_extend(
 									value,
-									self.in_module_generator.generator.context.i16_type(),
+									self.mdl_gen.generator.context.i16_type(),
 									"CAST -> i16",
 								),
 							}
@@ -1589,7 +1622,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							Value::I16 {
 								value: block.builder.build_int_truncate(
 									value,
-									self.in_module_generator.generator.context.i16_type(),
+									self.mdl_gen.generator.context.i16_type(),
 									"CAST -> i16",
 								),
 							}
@@ -1602,7 +1635,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							Value::I32 {
 								value: block.builder.build_int_s_extend(
 									value,
-									self.in_module_generator.generator.context.i32_type(),
+									self.mdl_gen.generator.context.i32_type(),
 									"CAST -> i32",
 								),
 							}
@@ -1610,7 +1643,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							Value::I32 {
 								value: block.builder.build_int_truncate(
 									value,
-									self.in_module_generator.generator.context.i32_type(),
+									self.mdl_gen.generator.context.i32_type(),
 									"CAST -> i32",
 								),
 							}
@@ -1623,7 +1656,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							Value::I64 {
 								value: block.builder.build_int_s_extend(
 									value,
-									self.in_module_generator.generator.context.i64_type(),
+									self.mdl_gen.generator.context.i64_type(),
 									"CAST -> i64",
 								),
 							}
@@ -1631,7 +1664,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							Value::I64 {
 								value: block.builder.build_int_truncate(
 									value,
-									self.in_module_generator.generator.context.i64_type(),
+									self.mdl_gen.generator.context.i64_type(),
 									"CAST -> i64",
 								),
 							}
@@ -1644,7 +1677,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							Value::I128 {
 								value: block.builder.build_int_s_extend(
 									value,
-									self.in_module_generator.generator.context.i128_type(),
+									self.mdl_gen.generator.context.i128_type(),
 									"CAST -> i128",
 								),
 							}
@@ -1656,7 +1689,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 						} else {
 							block.builder.build_int_truncate(
 								value,
-								self.in_module_generator.generator.context.i8_type(),
+								self.mdl_gen.generator.context.i8_type(),
 								"CAST -> u8",
 							)
 						},
@@ -1667,13 +1700,13 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 						} else if operand.get_type().get_bitwidth() < 16 {
 							block.builder.build_int_s_extend(
 								value,
-								self.in_module_generator.generator.context.i16_type(),
+								self.mdl_gen.generator.context.i16_type(),
 								"CAST -> u16",
 							)
 						} else {
 							block.builder.build_int_truncate(
 								value,
-								self.in_module_generator.generator.context.i16_type(),
+								self.mdl_gen.generator.context.i16_type(),
 								"CAST -> u16",
 							)
 						},
@@ -1684,13 +1717,13 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 						} else if operand.get_type().get_bitwidth() < 32 {
 							block.builder.build_int_s_extend(
 								value,
-								self.in_module_generator.generator.context.i32_type(),
+								self.mdl_gen.generator.context.i32_type(),
 								"CAST -> u32",
 							)
 						} else {
 							block.builder.build_int_truncate(
 								value,
-								self.in_module_generator.generator.context.i32_type(),
+								self.mdl_gen.generator.context.i32_type(),
 								"CAST -> u32",
 							)
 						},
@@ -1701,13 +1734,13 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 						} else if operand.get_type().get_bitwidth() < 64 {
 							block.builder.build_int_s_extend(
 								value,
-								self.in_module_generator.generator.context.i64_type(),
+								self.mdl_gen.generator.context.i64_type(),
 								"CAST -> u64",
 							)
 						} else {
 							block.builder.build_int_truncate(
 								value,
-								self.in_module_generator.generator.context.i64_type(),
+								self.mdl_gen.generator.context.i64_type(),
 								"CAST -> u64",
 							)
 						},
@@ -1718,7 +1751,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 						} else {
 							block.builder.build_int_s_extend(
 								value,
-								self.in_module_generator.generator.context.i128_type(),
+								self.mdl_gen.generator.context.i128_type(),
 								"CAST -> u128",
 							)
 						},
@@ -1726,21 +1759,21 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 					TokenType::KeywordF16 => Value::F16 {
 						value: block.builder.build_signed_int_to_float(
 							value,
-							self.in_module_generator.generator.context.f16_type(),
+							self.mdl_gen.generator.context.f16_type(),
 							"CAST -> f16",
 						),
 					},
 					TokenType::KeywordF32 => Value::F32 {
 						value: block.builder.build_signed_int_to_float(
 							value,
-							self.in_module_generator.generator.context.f32_type(),
+							self.mdl_gen.generator.context.f32_type(),
 							"CAST -> f32",
 						),
 					},
 					TokenType::KeywordF64 => Value::F64 {
 						value: block.builder.build_signed_int_to_float(
 							value,
-							self.in_module_generator.generator.context.f64_type(),
+							self.mdl_gen.generator.context.f64_type(),
 							"CAST -> f64",
 						),
 					},
@@ -1757,32 +1790,27 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							IntPredicate::NE,
 							value,
 							match operand.get_type().get_bitwidth() {
-								8 => self
-									.in_module_generator
-									.generator
-									.context
-									.i8_type()
-									.const_int(0, false),
+								8 => self.mdl_gen.generator.context.i8_type().const_int(0, false),
 								16 => self
-									.in_module_generator
+									.mdl_gen
 									.generator
 									.context
 									.i16_type()
 									.const_int(0, false),
 								32 => self
-									.in_module_generator
+									.mdl_gen
 									.generator
 									.context
 									.i32_type()
 									.const_int(0, false),
 								64 => self
-									.in_module_generator
+									.mdl_gen
 									.generator
 									.context
 									.i64_type()
 									.const_int(0, false),
 								128 => self
-									.in_module_generator
+									.mdl_gen
 									.generator
 									.context
 									.i128_type()
@@ -1798,7 +1826,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 						} else {
 							block.builder.build_int_truncate(
 								value,
-								self.in_module_generator.generator.context.i8_type(),
+								self.mdl_gen.generator.context.i8_type(),
 								"CAST -> u8",
 							)
 						},
@@ -1809,13 +1837,13 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 						} else if operand.get_type().get_bitwidth() < 16 {
 							block.builder.build_int_z_extend(
 								value,
-								self.in_module_generator.generator.context.i16_type(),
+								self.mdl_gen.generator.context.i16_type(),
 								"CAST -> i16",
 							)
 						} else {
 							block.builder.build_int_truncate(
 								value,
-								self.in_module_generator.generator.context.i16_type(),
+								self.mdl_gen.generator.context.i16_type(),
 								"CAST -> i16",
 							)
 						},
@@ -1826,13 +1854,13 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 						} else if operand.get_type().get_bitwidth() < 32 {
 							block.builder.build_int_z_extend(
 								value,
-								self.in_module_generator.generator.context.i32_type(),
+								self.mdl_gen.generator.context.i32_type(),
 								"CAST -> i32",
 							)
 						} else {
 							block.builder.build_int_truncate(
 								value,
-								self.in_module_generator.generator.context.i32_type(),
+								self.mdl_gen.generator.context.i32_type(),
 								"CAST -> i32",
 							)
 						},
@@ -1843,13 +1871,13 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 						} else if operand.get_type().get_bitwidth() < 64 {
 							block.builder.build_int_z_extend(
 								value,
-								self.in_module_generator.generator.context.i64_type(),
+								self.mdl_gen.generator.context.i64_type(),
 								"CAST -> i64",
 							)
 						} else {
 							block.builder.build_int_truncate(
 								value,
-								self.in_module_generator.generator.context.i64_type(),
+								self.mdl_gen.generator.context.i64_type(),
 								"CAST -> i64",
 							)
 						},
@@ -1860,7 +1888,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 						} else {
 							block.builder.build_int_z_extend(
 								value,
-								self.in_module_generator.generator.context.i128_type(),
+								self.mdl_gen.generator.context.i128_type(),
 								"CAST -> i128",
 							)
 						},
@@ -1872,7 +1900,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							Value::U8 {
 								value: block.builder.build_int_truncate(
 									value,
-									self.in_module_generator.generator.context.i8_type(),
+									self.mdl_gen.generator.context.i8_type(),
 									"CAST -> u8",
 								),
 							}
@@ -1885,7 +1913,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							Value::U16 {
 								value: block.builder.build_int_s_extend(
 									value,
-									self.in_module_generator.generator.context.i16_type(),
+									self.mdl_gen.generator.context.i16_type(),
 									"CAST -> u16",
 								),
 							}
@@ -1893,7 +1921,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							Value::U16 {
 								value: block.builder.build_int_truncate(
 									value,
-									self.in_module_generator.generator.context.i16_type(),
+									self.mdl_gen.generator.context.i16_type(),
 									"CAST -> u16",
 								),
 							}
@@ -1906,7 +1934,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							Value::U32 {
 								value: block.builder.build_int_s_extend(
 									value,
-									self.in_module_generator.generator.context.i32_type(),
+									self.mdl_gen.generator.context.i32_type(),
 									"CAST -> u32",
 								),
 							}
@@ -1914,7 +1942,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							Value::U32 {
 								value: block.builder.build_int_truncate(
 									value,
-									self.in_module_generator.generator.context.i32_type(),
+									self.mdl_gen.generator.context.i32_type(),
 									"CAST -> u32",
 								),
 							}
@@ -1927,7 +1955,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							Value::U64 {
 								value: block.builder.build_int_s_extend(
 									value,
-									self.in_module_generator.generator.context.i64_type(),
+									self.mdl_gen.generator.context.i64_type(),
 									"CAST -> u64",
 								),
 							}
@@ -1935,7 +1963,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							Value::U64 {
 								value: block.builder.build_int_truncate(
 									value,
-									self.in_module_generator.generator.context.i64_type(),
+									self.mdl_gen.generator.context.i64_type(),
 									"CAST -> u64",
 								),
 							}
@@ -1948,7 +1976,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							Value::U128 {
 								value: block.builder.build_int_s_extend(
 									value,
-									self.in_module_generator.generator.context.i128_type(),
+									self.mdl_gen.generator.context.i128_type(),
 									"CAST -> u128",
 								),
 							}
@@ -1957,21 +1985,21 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 					TokenType::KeywordF16 => Value::F16 {
 						value: block.builder.build_unsigned_int_to_float(
 							value,
-							self.in_module_generator.generator.context.f16_type(),
+							self.mdl_gen.generator.context.f16_type(),
 							"CAST -> f16",
 						),
 					},
 					TokenType::KeywordF32 => Value::F32 {
 						value: block.builder.build_unsigned_int_to_float(
 							value,
-							self.in_module_generator.generator.context.f32_type(),
+							self.mdl_gen.generator.context.f32_type(),
 							"CAST -> f32",
 						),
 					},
 					TokenType::KeywordF64 => Value::F64 {
 						value: block.builder.build_unsigned_int_to_float(
 							value,
-							self.in_module_generator.generator.context.f64_type(),
+							self.mdl_gen.generator.context.f64_type(),
 							"CAST -> f64",
 						),
 					},
@@ -1988,24 +2016,9 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							FloatPredicate::ONE,
 							value,
 							match operand.get_type().get_bitwidth() {
-								16 => self
-									.in_module_generator
-									.generator
-									.context
-									.f16_type()
-									.const_float(0.0),
-								32 => self
-									.in_module_generator
-									.generator
-									.context
-									.f32_type()
-									.const_float(0.0),
-								64 => self
-									.in_module_generator
-									.generator
-									.context
-									.f64_type()
-									.const_float(0.0),
+								16 => self.mdl_gen.generator.context.f16_type().const_float(0.0),
+								32 => self.mdl_gen.generator.context.f32_type().const_float(0.0),
+								64 => self.mdl_gen.generator.context.f64_type().const_float(0.0),
 								_ => unreachable!(),
 							},
 							"CAST -> bool",
@@ -2014,70 +2027,70 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 					TokenType::KeywordI8 => Value::I8 {
 						value: block.builder.build_float_to_signed_int(
 							value,
-							self.in_module_generator.generator.context.i8_type(),
+							self.mdl_gen.generator.context.i8_type(),
 							"CAST -> i8",
 						),
 					},
 					TokenType::KeywordI16 => Value::I16 {
 						value: block.builder.build_float_to_signed_int(
 							value,
-							self.in_module_generator.generator.context.i16_type(),
+							self.mdl_gen.generator.context.i16_type(),
 							"CAST -> i16",
 						),
 					},
 					TokenType::KeywordI32 => Value::I32 {
 						value: block.builder.build_float_to_signed_int(
 							value,
-							self.in_module_generator.generator.context.i32_type(),
+							self.mdl_gen.generator.context.i32_type(),
 							"CAST -> i32",
 						),
 					},
 					TokenType::KeywordI64 => Value::I64 {
 						value: block.builder.build_float_to_signed_int(
 							value,
-							self.in_module_generator.generator.context.i64_type(),
+							self.mdl_gen.generator.context.i64_type(),
 							"CAST -> i64",
 						),
 					},
 					TokenType::KeywordI128 => Value::I128 {
 						value: block.builder.build_float_to_signed_int(
 							value,
-							self.in_module_generator.generator.context.i128_type(),
+							self.mdl_gen.generator.context.i128_type(),
 							"CAST -> i128",
 						),
 					},
 					TokenType::KeywordU8 => Value::U8 {
 						value: block.builder.build_float_to_unsigned_int(
 							value,
-							self.in_module_generator.generator.context.i8_type(),
+							self.mdl_gen.generator.context.i8_type(),
 							"CAST -> u8",
 						),
 					},
 					TokenType::KeywordU16 => Value::U16 {
 						value: block.builder.build_float_to_unsigned_int(
 							value,
-							self.in_module_generator.generator.context.i16_type(),
+							self.mdl_gen.generator.context.i16_type(),
 							"CAST -> u16",
 						),
 					},
 					TokenType::KeywordU32 => Value::U32 {
 						value: block.builder.build_float_to_unsigned_int(
 							value,
-							self.in_module_generator.generator.context.i32_type(),
+							self.mdl_gen.generator.context.i32_type(),
 							"CAST -> u32",
 						),
 					},
 					TokenType::KeywordU64 => Value::U64 {
 						value: block.builder.build_float_to_unsigned_int(
 							value,
-							self.in_module_generator.generator.context.i64_type(),
+							self.mdl_gen.generator.context.i64_type(),
 							"CAST -> u64",
 						),
 					},
 					TokenType::KeywordU128 => Value::U128 {
 						value: block.builder.build_float_to_unsigned_int(
 							value,
-							self.in_module_generator.generator.context.i128_type(),
+							self.mdl_gen.generator.context.i128_type(),
 							"CAST -> u128",
 						),
 					},
@@ -2088,7 +2101,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							Value::F16 {
 								value: block.builder.build_float_trunc(
 									value,
-									self.in_module_generator.generator.context.f16_type(),
+									self.mdl_gen.generator.context.f16_type(),
 									"CAST -> f16",
 								),
 							}
@@ -2101,7 +2114,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							Value::F32 {
 								value: block.builder.build_float_ext(
 									value,
-									self.in_module_generator.generator.context.f32_type(),
+									self.mdl_gen.generator.context.f32_type(),
 									"CAST -> f32",
 								),
 							}
@@ -2109,7 +2122,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							Value::F32 {
 								value: block.builder.build_float_trunc(
 									value,
-									self.in_module_generator.generator.context.f32_type(),
+									self.mdl_gen.generator.context.f32_type(),
 									"CAST -> f32",
 								),
 							}
@@ -2122,7 +2135,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 							Value::F64 {
 								value: block.builder.build_float_ext(
 									value,
-									self.in_module_generator.generator.context.f64_type(),
+									self.mdl_gen.generator.context.f64_type(),
 									"CAST -> f64",
 								),
 							}
@@ -2249,18 +2262,14 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 				.handle_int(&|_, lhs_value| match lhs.get_type().get_bitwidth() {
 					8 => Value::I8 {
 						value: block.builder.build_int_nsw_sub(
-							self.in_module_generator
-								.generator
-								.context
-								.i8_type()
-								.const_int(0, false),
+							self.mdl_gen.generator.context.i8_type().const_int(0, false),
 							lhs_value,
 							"NEG",
 						),
 					},
 					16 => Value::I16 {
 						value: block.builder.build_int_nsw_sub(
-							self.in_module_generator
+							self.mdl_gen
 								.generator
 								.context
 								.i16_type()
@@ -2271,7 +2280,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 					},
 					32 => Value::I32 {
 						value: block.builder.build_int_nsw_sub(
-							self.in_module_generator
+							self.mdl_gen
 								.generator
 								.context
 								.i32_type()
@@ -2282,7 +2291,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 					},
 					64 => Value::I64 {
 						value: block.builder.build_int_nsw_sub(
-							self.in_module_generator
+							self.mdl_gen
 								.generator
 								.context
 								.i64_type()
@@ -2293,7 +2302,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 					},
 					128 => Value::I128 {
 						value: block.builder.build_int_nsw_sub(
-							self.in_module_generator
+							self.mdl_gen
 								.generator
 								.context
 								.i128_type()
@@ -2335,7 +2344,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 			lhs_block.builder.build_int_compare(
 				IntPredicate::EQ,
 				value,
-				self.in_module_generator
+				self.mdl_gen
 					.generator
 					.context
 					.bool_type()
@@ -2433,7 +2442,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 		}
 
 		let function_name = &ast.children[0].child.as_ref().unwrap().token_content;
-		let function = match self.in_module_generator.function_table.get(function_name) {
+		let function = match self.mdl_gen.function_table.get(function_name) {
 			Some(function) => function,
 			None => {
 				panic!(
@@ -2509,40 +2518,30 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 
 		match ast.children[0].name.as_ref() {
 			"LiteralBool" => Value::Bool {
-				value: self
-					.in_module_generator
-					.generator
-					.context
-					.bool_type()
-					.const_int(
-						if content.parse::<bool>().unwrap() {
-							1
-						} else {
-							0
-						},
-						false,
-					),
+				value: self.mdl_gen.generator.context.bool_type().const_int(
+					if content.parse::<bool>().unwrap() {
+						1
+					} else {
+						0
+					},
+					false,
+				),
 			},
 			"LiteralInteger" => Value::I32 {
-				value: self
-					.in_module_generator
-					.generator
-					.context
-					.i32_type()
-					.const_int(
-						if content.starts_with("+") {
-							content[1..].parse::<u64>().unwrap()
-						} else if content.starts_with("-") {
-							!content[1..].parse::<u64>().unwrap() + 1
-						} else {
-							content.parse::<u64>().unwrap()
-						},
-						true,
-					),
+				value: self.mdl_gen.generator.context.i32_type().const_int(
+					if content.starts_with("+") {
+						content[1..].parse::<u64>().unwrap()
+					} else if content.starts_with("-") {
+						!content[1..].parse::<u64>().unwrap() + 1
+					} else {
+						content.parse::<u64>().unwrap()
+					},
+					true,
+				),
 			},
 			"LiteralDecimal" => Value::F32 {
 				value: self
-					.in_module_generator
+					.mdl_gen
 					.generator
 					.context
 					.f32_type()
@@ -2583,28 +2582,28 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 						ValueType::I16 => Value::I16 {
 							value: in_basic_block_generator.builder.build_int_s_extend(
 								value,
-								self.in_module_generator.generator.context.i16_type(),
+								self.mdl_gen.generator.context.i16_type(),
 								"CAST -> i16",
 							),
 						},
 						ValueType::I32 => Value::I32 {
 							value: in_basic_block_generator.builder.build_int_s_extend(
 								value,
-								self.in_module_generator.generator.context.i32_type(),
+								self.mdl_gen.generator.context.i32_type(),
 								"CAST -> i32",
 							),
 						},
 						ValueType::I64 => Value::I64 {
 							value: in_basic_block_generator.builder.build_int_s_extend(
 								value,
-								self.in_module_generator.generator.context.i64_type(),
+								self.mdl_gen.generator.context.i64_type(),
 								"CAST -> i64",
 							),
 						},
 						ValueType::I128 => Value::I128 {
 							value: in_basic_block_generator.builder.build_int_s_extend(
 								value,
-								self.in_module_generator.generator.context.i128_type(),
+								self.mdl_gen.generator.context.i128_type(),
 								"CAST -> i128",
 							),
 						},
@@ -2614,28 +2613,28 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 						ValueType::U16 => Value::U16 {
 							value: in_basic_block_generator.builder.build_int_z_extend(
 								value,
-								self.in_module_generator.generator.context.i16_type(),
+								self.mdl_gen.generator.context.i16_type(),
 								"CAST -> u16",
 							),
 						},
 						ValueType::U32 => Value::U32 {
 							value: in_basic_block_generator.builder.build_int_z_extend(
 								value,
-								self.in_module_generator.generator.context.i32_type(),
+								self.mdl_gen.generator.context.i32_type(),
 								"CAST -> u32",
 							),
 						},
 						ValueType::U64 => Value::U64 {
 							value: in_basic_block_generator.builder.build_int_z_extend(
 								value,
-								self.in_module_generator.generator.context.i64_type(),
+								self.mdl_gen.generator.context.i64_type(),
 								"CAST -> u64",
 							),
 						},
 						ValueType::U128 => Value::U128 {
 							value: in_basic_block_generator.builder.build_int_z_extend(
 								value,
-								self.in_module_generator.generator.context.i128_type(),
+								self.mdl_gen.generator.context.i128_type(),
 								"CAST -> u128",
 							),
 						},
@@ -2645,14 +2644,14 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 						ValueType::F32 => Value::F32 {
 							value: in_basic_block_generator.builder.build_float_ext(
 								value,
-								self.in_module_generator.generator.context.f32_type(),
+								self.mdl_gen.generator.context.f32_type(),
 								"CAST -> f32",
 							),
 						},
 						ValueType::F64 => Value::F64 {
 							value: in_basic_block_generator.builder.build_float_ext(
 								value,
-								self.in_module_generator.generator.context.f64_type(),
+								self.mdl_gen.generator.context.f64_type(),
 								"CAST -> f64",
 							),
 						},
@@ -2668,6 +2667,22 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 		}
 
 		(lhs, rhs)
+	}
+}
+
+pub struct InScopeGenerator<'ctx> {
+	pub initial_stack: PointerValue<'ctx>,
+	pub initial_variable_table: HashMap<String, (ValueType, PointerValue<'ctx>)>,
+}
+
+impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> InScopeGenerator<'ctx> {
+	pub fn end_scope(self, fnc_gen: &'fnc mut InFunctionGenerator<'mdl, 'ctx>) {
+		fnc_gen.last_basic_block().builder.build_call(
+			fnc_gen.mdl_gen.intrinsic_function_stackrestore,
+			vec![BasicValueEnum::PointerValue(self.initial_stack)].as_slice(),
+			"@llvm.stackrestore",
+		);
+		fnc_gen.variable_table = self.initial_variable_table;
 	}
 }
 
