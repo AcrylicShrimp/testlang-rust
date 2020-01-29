@@ -148,6 +148,7 @@ impl<'a, 'ctx: 'a> InModuleGenerator<'ctx> {
 			name: name.to_owned(),
 			function: function,
 			mdl_gen: self,
+			last_basic_block: self.generator.context.append_basic_block(function, "entry"),
 			variable_table_list: vec![HashMap::new()],
 		}
 	}
@@ -189,6 +190,7 @@ pub struct InFunctionGenerator<'mdl, 'ctx> {
 	pub name: String,
 	pub function: FunctionValue<'ctx>,
 	pub mdl_gen: &'mdl InModuleGenerator<'ctx>,
+	pub last_basic_block: BasicBlock,
 	pub variable_table_list: Vec<HashMap<String, (ValueType, PointerValue<'ctx>)>>,
 }
 
@@ -224,7 +226,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 			.mdl_gen
 			.generator
 			.context
-			.append_basic_block(self.function, name);
+			.insert_basic_block_after(&self.last_basic_block, name);
 		let builder = self.mdl_gen.generator.context.create_builder();
 
 		builder.position_at_end(&basic_block);
@@ -237,14 +239,18 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 	}
 
 	pub fn last_basic_block(&'a self) -> InBasicBlockGenerator<'ctx> {
-		let basic_block = self.function.get_last_basic_block().unwrap();
 		let builder = self.mdl_gen.generator.context.create_builder();
 
-		builder.position_at_end(&basic_block);
+		builder.position_at_end(&self.last_basic_block);
 
 		InBasicBlockGenerator {
-			name: basic_block.get_name().to_str().unwrap().to_owned(),
-			basic_block: basic_block,
+			name: self
+				.last_basic_block
+				.get_name()
+				.to_str()
+				.unwrap()
+				.to_owned(),
+			basic_block: self.last_basic_block,
 			builder: builder,
 		}
 	}
@@ -323,6 +329,7 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 		}
 
 		let scope = self.new_scope();
+
 		self.generate_code(&ast.children[1]);
 		scope.end_scope(self);
 	}
@@ -371,6 +378,13 @@ impl<'a, 'mdl: 'a, 'ctx: 'mdl> InFunctionGenerator<'mdl, 'ctx> {
 		block_else
 			.builder
 			.build_unconditional_branch(&block_end.basic_block);
+	}
+
+	fn generate_statement_code_for(&'a mut self, ast: &AST) {
+		match ast.children.len() {
+			2 => {}
+			_ => unreachable!(),
+		}
 	}
 
 	fn generate_statement_code_let(&'a mut self, ast: &AST) {

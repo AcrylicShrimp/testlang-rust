@@ -12,6 +12,8 @@ statement: @for-statement;
 statement: @with-statement;
 statement: @ret-statement Semicolon;
 statement: @let-statement Semicolon;
+statement: @break-statement Semicolon;
+statement: @continue-statement Semicolon;
 statement: @expression Semicolon;
 
 scope-statement: BraceL BraceR;
@@ -20,10 +22,16 @@ scope-statement: BraceL @statement-list BraceR;
 if-statement: KeywordIf @expression @scope-statement;
 if-statement: KeywordIf @expression @scope-statement KeywordElse @scope-statement;
 if-statement: KeywordIf @expression @scope-statement KeywordElse @if-statement;
+if-statement: Id KeywordAs KeywordIf @expression @scope-statement;
+if-statement: Id KeywordAs KeywordIf @expression @scope-statement KeywordElse @scope-statement;
+if-statement: Id KeywordAs KeywordIf @expression @scope-statement KeywordElse @if-statement;
 
 for-statement: KeywordFor @scope-statement;
 for-statement: KeywordFor @expression @scope-statement;
 for-statement: KeywordFor @for-statement-id-list KeywordIn @expression @scope-statement;
+for-statement: Id KeywordAs KeywordFor @scope-statement;
+for-statement: Id KeywordAs KeywordFor @expression @scope-statement;
+for-statement: Id KeywordAs KeywordFor @for-statement-id-list KeywordIn @expression @scope-statement;
 
 for-statement-id-list: Id;
 for-statement-id-list: @for-statement-id-list Comma Id;
@@ -38,6 +46,12 @@ ret-statement: KeywordRet @expression;
 
 let-statement: KeywordLet Id OpAssign @expression;
 let-statement: KeywordLet Id @type OpAssign @expression;
+
+break-statement: KeywordBreak;
+break-statement: KeywordBreak @break-statement;
+
+continue-statement: KeywordContinue;
+continue-statement: KeywordContinue @continue-statement;
 
 type: KeywordVoid;
 type: KeywordBool;
