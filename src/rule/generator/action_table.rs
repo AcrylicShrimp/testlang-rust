@@ -1,9 +1,14 @@
+extern crate serde;
+
 use super::super::parser::RuleItemType;
 use super::generator::Generator;
+
+use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
 use std::vec::Vec;
 
+#[derive(Serialize, Deserialize)]
 pub enum ActionType {
 	Shift,
 	Reduce,
@@ -11,6 +16,7 @@ pub enum ActionType {
 	Accept,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Action {
 	pub action_type: ActionType,
 	pub next_state: usize,
@@ -18,6 +24,7 @@ pub struct Action {
 	pub reduce_rule_name: String,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct ActionMap {
 	pub id: HashMap<String, Action>,
 	pub literal: HashMap<String, Action>,
