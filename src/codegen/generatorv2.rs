@@ -439,6 +439,7 @@ impl<'stmt, 'fnc: 'stmt, 'mdl: 'fnc, 'ctx: 'mdl> FuncGenWrapperImpl<'fnc, 'mdl, 
 				.collect();
 
 			statement_ast_stack.append(&mut statement_vec);
+			9
 		}
 
 		for ast in statement_ast_stack.into_iter().rev() {
