@@ -227,6 +227,37 @@ impl<'ctx> Value<'ctx> {
 		}
 	}
 
+	pub fn from_int_value(bitwidth: usize, value: IntValue<'ctx>) -> Value<'ctx> {
+		match bitwidth {
+			8 => Value::I8 { value: value },
+			16 => Value::I16 { value: value },
+			32 => Value::I32 { value: value },
+			64 => Value::I64 { value: value },
+			128 => Value::I128 { value: value },
+			_ => unreachable!(),
+		}
+	}
+
+	pub fn from_unsigned_int_value(bitwidth: usize, value: IntValue<'ctx>) -> Value<'ctx> {
+		match bitwidth {
+			8 => Value::U8 { value: value },
+			16 => Value::U16 { value: value },
+			32 => Value::U32 { value: value },
+			64 => Value::U64 { value: value },
+			128 => Value::U128 { value: value },
+			_ => unreachable!(),
+		}
+	}
+
+	pub fn from_float_value(bitwidth: usize, value: FloatValue<'ctx>) -> Value<'ctx> {
+		match bitwidth {
+			16 => Value::F16 { value: value },
+			32 => Value::F32 { value: value },
+			64 => Value::F64 { value: value },
+			_ => unreachable!(),
+		}
+	}
+
 	pub fn from_any_value(value_type: ValueType, any_value: AnyValueEnum<'ctx>) -> Value<'ctx> {
 		match any_value {
 			AnyValueEnum::IntValue(value) => match value_type {

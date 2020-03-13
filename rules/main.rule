@@ -75,13 +75,13 @@ assignment: @left-value OpAssignAdd @assignment;
 assignment: @left-value OpAssignSub @assignment;
 assignment: @left-value OpAssignMul @assignment;
 assignment: @left-value OpAssignDiv @assignment;
-assignment: @left-value OpAssignPow @assignment;
+assignment: @left-value OpAssignMod @assignment;
+assignment: @left-value OpAssignShiftL @assignment;
+assignment: @left-value OpAssignShiftR @assignment;
 assignment: @left-value OpAssignBitOr @assignment;
 assignment: @left-value OpAssignBitAnd @assignment;
 assignment: @left-value OpAssignBitXor @assignment;
 assignment: @left-value OpAssignBitNot @assignment;
-assignment: @left-value OpAssignShiftL @assignment;
-assignment: @left-value OpAssignShiftR @assignment;
 
 op-or: @op-and;
 op-or: @op-or OpOr @op-and;

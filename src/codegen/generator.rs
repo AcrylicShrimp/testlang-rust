@@ -414,45 +414,56 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
         }
 
         if ast.children.len() == 3 {
-            // Creates entry points.
-            let then_block = BlockGen::new(context, self.function, "THEN");
-            let end_block = BlockGen::new(context, self.function, "END");
-            criteria.invoke_handler(ValueHandler::new().handle_bool(&|_, value| {
-                self.last_block
-                    .connect_to_if(value, &then_block, &end_block);
-            }));
+            let temp_last_block = BlockGen::from(context, self.last_block.block);
 
-            // Then block expansion.
-            self.last_block = then_block;
+            // Then block.
+            self.last_block = BlockGen::new(context, self.function, "THEN");
+            let temp_then_block = BlockGen::from(context, self.last_block.block);
+
             self = self.generate_code_statement_scope(context, module, &ast.children[2]);
-            self.last_block.connect_to(&end_block);
 
-            self.last_block = end_block;
+            let temp_then_block_end = BlockGen::from(context, self.last_block.block);
+
+            // End block.
+            self.last_block = BlockGen::new(context, self.function, "IF END");
+            let temp_end_block = BlockGen::from(context, self.last_block.block);
+
+            criteria.invoke_handler(ValueHandler::new().handle_bool(&|_, value| {
+                temp_last_block.connect_to_if(value, &temp_then_block, &temp_end_block)
+            }));
+            temp_then_block_end.connect_to(&temp_end_block);
         } else {
-            // Creates entry points.
-            let then_block = BlockGen::new(context, self.function, "THEN");
-            let else_block = BlockGen::new(context, self.function, "ELSE");
-            let end_block = BlockGen::new(context, self.function, "END");
-            criteria.invoke_handler(ValueHandler::new().handle_bool(&|_, value| {
-                self.last_block
-                    .connect_to_if(value, &then_block, &else_block);
-            }));
+            let temp_last_block = BlockGen::from(context, self.last_block.block);
 
-            // Then block expansion.
-            self.last_block = then_block;
+            // Then block.
+            self.last_block = BlockGen::new(context, self.function, "THEN");
+            let temp_then_block = BlockGen::from(context, self.last_block.block);
+
             self = self.generate_code_statement_scope(context, module, &ast.children[2]);
-            self.last_block.connect_to(&end_block);
 
-            // Else block expansion.
-            self.last_block = else_block;
+            let temp_then_block_end = BlockGen::from(context, self.last_block.block);
+
+            // Else block.
+            self.last_block = BlockGen::new(context, self.function, "ELSE");
+            let temp_else_block = BlockGen::from(context, self.last_block.block);
+
             self = if ast.children[4].name == "scope-statement" {
                 self.generate_code_statement_scope(context, module, &ast.children[4])
             } else {
                 self.generate_code_statement_if(context, module, &ast.children[4])
             };
-            self.last_block.connect_to(&end_block);
 
-            self.last_block = end_block;
+            let temp_else_block_end = BlockGen::from(context, self.last_block.block);
+
+            // End block.
+            self.last_block = BlockGen::new(context, self.function, "IF END");
+            let temp_end_block = BlockGen::from(context, self.last_block.block);
+
+            criteria.invoke_handler(ValueHandler::new().handle_bool(&|_, value| {
+                temp_last_block.connect_to_if(value, &temp_then_block, &temp_else_block)
+            }));
+            temp_then_block_end.connect_to(&temp_end_block);
+            temp_else_block_end.connect_to(&temp_end_block);
         }
 
         self
@@ -470,23 +481,27 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
 
         if ast.children.len() == 2 {
             let loop_block = BlockGen::new(context, self.function, "LOOP");
-            let end_block = BlockGen::new(context, self.function, "END");
+            let exit_block = BlockGen::new(context, self.function, "LOOP EXIT");
             self.last_block.connect_to(&loop_block);
 
             self.loop_statement_entry_stack.push(loop_block.block);
-            self.loop_statement_exit_stack.push(end_block.block);
+            self.loop_statement_exit_stack.push(exit_block.block);
 
+            // Loop block.
             self.last_block = loop_block;
+            let temp_loop_block = BlockGen::from(context, self.last_block.block);
             self = self.generate_code_statement_scope(context, module, &ast.children[1]);
-            self.last_block.connect_to(&self.last_block);
+            self.last_block.connect_to(&temp_loop_block);
 
             self.loop_statement_entry_stack.pop();
             self.loop_statement_exit_stack.pop();
 
-            self.last_block = end_block;
+            // End block.
+            self.last_block = BlockGen::new(context, self.function, "LOOP END");
+            exit_block.connect_to(&self.last_block);
         } else if ast.children.len() == 4 {
             let loop_block = BlockGen::new(context, self.function, "LOOP");
-            let end_block = BlockGen::new(context, self.function, "END");
+            let exit_block = BlockGen::new(context, self.function, "LOOP EXIT");
             self.last_block.connect_to(&loop_block);
 
             self.loop_label_stack.push((
@@ -499,24 +514,30 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
                 self.loop_statement_entry_stack.len(),
             ));
             self.loop_statement_entry_stack.push(loop_block.block);
-            self.loop_statement_exit_stack.push(end_block.block);
+            self.loop_statement_exit_stack.push(exit_block.block);
 
+            // Loop block.
             self.last_block = loop_block;
+            let temp_loop_block = BlockGen::from(context, self.last_block.block);
             self = self.generate_code_statement_scope(context, module, &ast.children[3]);
-            self.last_block.connect_to(&self.last_block);
+            self.last_block.connect_to(&temp_loop_block);
 
             self.loop_label_stack.pop();
             self.loop_statement_entry_stack.pop();
             self.loop_statement_exit_stack.pop();
 
-            self.last_block = end_block;
+            // End block.
+            self.last_block = BlockGen::new(context, self.function, "LOOP END");
+            exit_block.connect_to(&self.last_block);
         } else if ast.children.len() == 3 {
             let criteria_block = BlockGen::new(context, self.function, "CRITERIA");
             let loop_block = BlockGen::new(context, self.function, "LOOP");
-            let end_block = BlockGen::new(context, self.function, "END");
+            let exit_block = BlockGen::new(context, self.function, "LOOP EXIT");
             self.last_block.connect_to(&criteria_block);
 
+            // Criteria block.
             self.last_block = criteria_block;
+            let temp_criteria_block = BlockGen::from(context, self.last_block.block);
             let criteria = self.generate_code_expression(context, module, &ast.children[1]);
 
             if criteria.get_type() != ValueType::Bool {
@@ -529,27 +550,32 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
 
             criteria.invoke_handler(ValueHandler::new().handle_bool(&|_, value| {
                 self.last_block
-                    .connect_to_if(value, &loop_block, &end_block);
+                    .connect_to_if(value, &loop_block, &exit_block);
             }));
 
             self.loop_statement_entry_stack.push(self.last_block.block);
-            self.loop_statement_exit_stack.push(end_block.block);
+            self.loop_statement_exit_stack.push(exit_block.block);
 
+            // Loop block.
             self.last_block = loop_block;
             self = self.generate_code_statement_scope(context, module, &ast.children[2]);
-            self.last_block.connect_to(&self.last_block);
+            self.last_block.connect_to(&temp_criteria_block);
 
             self.loop_statement_entry_stack.pop();
             self.loop_statement_exit_stack.pop();
 
-            self.last_block = end_block;
+            // Exit block.
+            self.last_block = BlockGen::new(context, self.function, "LOOP END");
+            exit_block.connect_to(&self.last_block);
         } else if ast.children.len() == 5 {
             let criteria_block = BlockGen::new(context, self.function, "CRITERIA");
             let loop_block = BlockGen::new(context, self.function, "LOOP");
-            let end_block = BlockGen::new(context, self.function, "END");
+            let exit_block = BlockGen::new(context, self.function, "LOOP EXIT");
             self.last_block.connect_to(&criteria_block);
 
+            // Criteria block.
             self.last_block = criteria_block;
+            let temp_criteria_block = BlockGen::from(context, self.last_block.block);
             let criteria = self.generate_code_expression(context, module, &ast.children[1]);
 
             if criteria.get_type() != ValueType::Bool {
@@ -562,7 +588,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
 
             criteria.invoke_handler(ValueHandler::new().handle_bool(&|_, value| {
                 self.last_block
-                    .connect_to_if(value, &loop_block, &end_block);
+                    .connect_to_if(value, &loop_block, &exit_block);
             }));
 
             self.loop_label_stack.push((
@@ -575,17 +601,20 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
                 self.loop_statement_entry_stack.len(),
             ));
             self.loop_statement_entry_stack.push(self.last_block.block);
-            self.loop_statement_exit_stack.push(end_block.block);
+            self.loop_statement_exit_stack.push(exit_block.block);
 
+            // Loop block.
             self.last_block = loop_block;
             self = self.generate_code_statement_scope(context, module, &ast.children[4]);
-            self.last_block.connect_to(&self.last_block);
+            self.last_block.connect_to(&temp_criteria_block);
 
             self.loop_label_stack.pop();
             self.loop_statement_entry_stack.pop();
             self.loop_statement_exit_stack.pop();
 
-            self.last_block = end_block;
+            // End block.
+            self.last_block = BlockGen::new(context, self.function, "LOOP END");
+            exit_block.connect_to(&self.last_block);
         } else {
             unimplemented!();
         }
@@ -753,7 +782,607 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
         module: &'mdl ModuleGen<'ctx>,
         ast: &AST,
     ) -> Value<'ctx> {
-        unimplemented!();
+        let mut value = self.generate_code_expression(context, module, &ast.children[2]);
+        let variable = self.get_left_value(context, module, &ast.children[0]);
+
+        value = self.match_type_single(context, value, variable.0);
+        value = match ast.children[1].child.as_ref().unwrap().token_type {
+            TokenType::OpAssign => value,
+            TokenType::OpAssignAdd => value.invoke_handler(
+                ValueHandler::new()
+                    .handle_int(&|_, rhs_value| {
+                        Value::from_int_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_int(&|_, lhs_value| {
+                                    self.last_block.builder.build_int_nsw_add(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal ADD",
+                                    )
+                                }),
+                            ),
+                        )
+                    })
+                    .handle_unsigned_int(&|_, rhs_value| {
+                        Value::from_unsigned_int_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_unsigned_int(&|_, lhs_value| {
+                                    self.last_block.builder.build_int_add(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal ADD",
+                                    )
+                                }),
+                            ),
+                        )
+                    })
+                    .handle_float(&|_, rhs_value| {
+                        Value::from_float_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_float(&|_, lhs_value| {
+                                    self.last_block.builder.build_float_add(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal ADD",
+                                    )
+                                }),
+                            ),
+                        )
+                    }),
+            ),
+            TokenType::OpAssignSub => value.invoke_handler(
+                ValueHandler::new()
+                    .handle_int(&|_, rhs_value| {
+                        Value::from_int_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_int(&|_, lhs_value| {
+                                    self.last_block.builder.build_int_nsw_sub(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal SUB",
+                                    )
+                                }),
+                            ),
+                        )
+                    })
+                    .handle_unsigned_int(&|_, rhs_value| {
+                        Value::from_unsigned_int_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_unsigned_int(&|_, lhs_value| {
+                                    self.last_block.builder.build_int_sub(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal SUB",
+                                    )
+                                }),
+                            ),
+                        )
+                    })
+                    .handle_float(&|_, rhs_value| {
+                        Value::from_float_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_float(&|_, lhs_value| {
+                                    self.last_block.builder.build_float_sub(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal SUB",
+                                    )
+                                }),
+                            ),
+                        )
+                    }),
+            ),
+            TokenType::OpAssignMul => value.invoke_handler(
+                ValueHandler::new()
+                    .handle_int(&|_, rhs_value| {
+                        Value::from_int_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_int(&|_, lhs_value| {
+                                    self.last_block.builder.build_int_nsw_mul(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal MUL",
+                                    )
+                                }),
+                            ),
+                        )
+                    })
+                    .handle_unsigned_int(&|_, rhs_value| {
+                        Value::from_unsigned_int_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_unsigned_int(&|_, lhs_value| {
+                                    self.last_block.builder.build_int_mul(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal MUL",
+                                    )
+                                }),
+                            ),
+                        )
+                    })
+                    .handle_float(&|_, rhs_value| {
+                        Value::from_float_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_float(&|_, lhs_value| {
+                                    self.last_block.builder.build_float_mul(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal MUL",
+                                    )
+                                }),
+                            ),
+                        )
+                    }),
+            ),
+            TokenType::OpAssignDiv => value.invoke_handler(
+                ValueHandler::new()
+                    .handle_int(&|_, rhs_value| {
+                        Value::from_int_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_int(&|_, lhs_value| {
+                                    self.last_block.builder.build_int_signed_div(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal DIV",
+                                    )
+                                }),
+                            ),
+                        )
+                    })
+                    .handle_unsigned_int(&|_, rhs_value| {
+                        Value::from_unsigned_int_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_unsigned_int(&|_, lhs_value| {
+                                    self.last_block.builder.build_int_unsigned_div(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal DIV",
+                                    )
+                                }),
+                            ),
+                        )
+                    })
+                    .handle_float(&|_, rhs_value| {
+                        Value::from_float_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_float(&|_, lhs_value| {
+                                    self.last_block.builder.build_float_div(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal DIV",
+                                    )
+                                }),
+                            ),
+                        )
+                    }),
+            ),
+            TokenType::OpAssignMod => value.invoke_handler(
+                ValueHandler::new()
+                    .handle_int(&|_, rhs_value| {
+                        Value::from_int_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_int(&|_, lhs_value| {
+                                    self.last_block.builder.build_int_signed_rem(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal MOD",
+                                    )
+                                }),
+                            ),
+                        )
+                    })
+                    .handle_unsigned_int(&|_, rhs_value| {
+                        Value::from_unsigned_int_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_unsigned_int(&|_, lhs_value| {
+                                    self.last_block.builder.build_int_unsigned_rem(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal MOD",
+                                    )
+                                }),
+                            ),
+                        )
+                    })
+                    .handle_float(&|_, rhs_value| {
+                        Value::from_float_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_float(&|_, lhs_value| {
+                                    self.last_block.builder.build_float_rem(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal REM",
+                                    )
+                                }),
+                            ),
+                        )
+                    }),
+            ),
+            TokenType::OpAssignShiftL => value.invoke_handler(
+                ValueHandler::new()
+                    .handle_int(&|_, rhs_value| {
+                        Value::from_int_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_int(&|_, lhs_value| {
+                                    self.last_block.builder.build_left_shift(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal LSH",
+                                    )
+                                }),
+                            ),
+                        )
+                    })
+                    .handle_unsigned_int(&|_, rhs_value| {
+                        Value::from_unsigned_int_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_unsigned_int(&|_, lhs_value| {
+                                    self.last_block.builder.build_left_shift(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal LSH",
+                                    )
+                                }),
+                            ),
+                        )
+                    })
+                    .handle_float(&|_, _| {
+                        panic!(
+                            "type error; bitwise operations between {}s are not allowed.",
+                            variable.0
+                        )
+                    }),
+            ),
+            TokenType::OpAssignShiftR => value.invoke_handler(
+                ValueHandler::new()
+                    .handle_int(&|_, rhs_value| {
+                        Value::from_int_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_int(&|_, lhs_value| {
+                                    self.last_block.builder.build_right_shift(
+                                        lhs_value,
+                                        rhs_value,
+                                        true,
+                                        "temporal RSH",
+                                    )
+                                }),
+                            ),
+                        )
+                    })
+                    .handle_unsigned_int(&|_, rhs_value| {
+                        Value::from_unsigned_int_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_unsigned_int(&|_, lhs_value| {
+                                    self.last_block.builder.build_right_shift(
+                                        lhs_value,
+                                        rhs_value,
+                                        false,
+                                        "temporal RSH",
+                                    )
+                                }),
+                            ),
+                        )
+                    })
+                    .handle_float(&|_, _| {
+                        panic!(
+                            "type error; bitwise operations between {}s are not allowed.",
+                            variable.0
+                        )
+                    }),
+            ),
+            TokenType::OpAssignBitOr => value.invoke_handler(
+                ValueHandler::new()
+                    .handle_int(&|_, rhs_value| {
+                        Value::from_int_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_int(&|_, lhs_value| {
+                                    self.last_block.builder.build_or(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal BITWISE OR",
+                                    )
+                                }),
+                            ),
+                        )
+                    })
+                    .handle_unsigned_int(&|_, rhs_value| {
+                        Value::from_unsigned_int_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_unsigned_int(&|_, lhs_value| {
+                                    self.last_block.builder.build_or(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal BITWISE OR",
+                                    )
+                                }),
+                            ),
+                        )
+                    })
+                    .handle_float(&|_, _| {
+                        panic!(
+                            "type error; bitwise operations between {}s are not allowed.",
+                            variable.0
+                        )
+                    }),
+            ),
+            TokenType::OpAssignBitAnd => value.invoke_handler(
+                ValueHandler::new()
+                    .handle_int(&|_, rhs_value| {
+                        Value::from_int_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_int(&|_, lhs_value| {
+                                    self.last_block.builder.build_and(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal BITWISE AND",
+                                    )
+                                }),
+                            ),
+                        )
+                    })
+                    .handle_unsigned_int(&|_, rhs_value| {
+                        Value::from_unsigned_int_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_unsigned_int(&|_, lhs_value| {
+                                    self.last_block.builder.build_and(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal BITWISE AND",
+                                    )
+                                }),
+                            ),
+                        )
+                    })
+                    .handle_float(&|_, _| {
+                        panic!(
+                            "type error; bitwise operations between {}s are not allowed.",
+                            variable.0
+                        )
+                    }),
+            ),
+            TokenType::OpAssignBitXor => value.invoke_handler(
+                ValueHandler::new()
+                    .handle_int(&|_, rhs_value| {
+                        Value::from_int_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_int(&|_, lhs_value| {
+                                    self.last_block.builder.build_xor(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal BITWISE XOR",
+                                    )
+                                }),
+                            ),
+                        )
+                    })
+                    .handle_unsigned_int(&|_, rhs_value| {
+                        Value::from_unsigned_int_value(
+                            variable.0.get_bitwidth(),
+                            Value::from_basic_value(
+                                variable.0,
+                                self.last_block
+                                    .builder
+                                    .build_load(variable.1, "temporal LOAD"),
+                            )
+                            .invoke_handler(
+                                ValueHandler::new().handle_unsigned_int(&|_, lhs_value| {
+                                    self.last_block.builder.build_xor(
+                                        lhs_value,
+                                        rhs_value,
+                                        "temporal BITWISE XOR",
+                                    )
+                                }),
+                            ),
+                        )
+                    })
+                    .handle_float(&|_, _| {
+                        panic!(
+                            "type error; bitwise operations between {}s are not allowed.",
+                            variable.0
+                        )
+                    }),
+            ),
+            TokenType::OpAssignBitNot => value.invoke_handler(
+                ValueHandler::new()
+                    .handle_int(&|_, rhs_value| {
+                        Value::from_int_value(
+                            variable.0.get_bitwidth(),
+                            self.last_block
+                                .builder
+                                .build_not(rhs_value, "temporal BITWISE NOT"),
+                        )
+                    })
+                    .handle_unsigned_int(&|_, rhs_value| {
+                        Value::from_unsigned_int_value(
+                            variable.0.get_bitwidth(),
+                            self.last_block
+                                .builder
+                                .build_not(rhs_value, "temporal BITWISE NOT"),
+                        )
+                    })
+                    .handle_float(&|_, _| {
+                        panic!(
+                            "type error; bitwise operations between {}s are not allowed.",
+                            variable.0
+                        )
+                    }),
+            ),
+            _ => unreachable!(),
+        };
+
+        self.last_block
+            .builder
+            .build_store(variable.1, value.to_basic_value());
+
+        value
     }
 
     pub fn generate_code_expression_op_or(
@@ -3100,5 +3729,127 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
         }
 
         (lhs, rhs)
+    }
+
+    pub fn match_type_single(
+        &'fnc mut self,
+        context: &'ctx Context,
+        value: Value<'ctx>,
+        value_type: ValueType,
+    ) -> Value<'ctx> {
+        if value.get_type().get_group() != value_type.get_group() {
+            panic!(
+                "incompatible type; unable to match {} and {}",
+                value.get_type(),
+                value_type
+            );
+        }
+
+        let perform_cast = |from: Value<'ctx>, to: ValueType| -> Value<'ctx> {
+            from.invoke_handler(
+                ValueHandler::new()
+                    .handle_int(&|_, value| match to {
+                        ValueType::I16 => Value::I16 {
+                            value: self.last_block.builder.build_int_s_extend(
+                                value,
+                                context.i16_type(),
+                                "CAST -> i16",
+                            ),
+                        },
+                        ValueType::I32 => Value::I32 {
+                            value: self.last_block.builder.build_int_s_extend(
+                                value,
+                                context.i32_type(),
+                                "CAST -> i32",
+                            ),
+                        },
+                        ValueType::I64 => Value::I64 {
+                            value: self.last_block.builder.build_int_s_extend(
+                                value,
+                                context.i64_type(),
+                                "CAST -> i64",
+                            ),
+                        },
+                        ValueType::I128 => Value::I128 {
+                            value: self.last_block.builder.build_int_s_extend(
+                                value,
+                                context.i128_type(),
+                                "CAST -> i128",
+                            ),
+                        },
+                        _ => unreachable!(),
+                    })
+                    .handle_unsigned_int(&|_, value| match to {
+                        ValueType::U16 => Value::U16 {
+                            value: self.last_block.builder.build_int_z_extend(
+                                value,
+                                context.i16_type(),
+                                "CAST -> u16",
+                            ),
+                        },
+                        ValueType::U32 => Value::U32 {
+                            value: self.last_block.builder.build_int_z_extend(
+                                value,
+                                context.i32_type(),
+                                "CAST -> u32",
+                            ),
+                        },
+                        ValueType::U64 => Value::U64 {
+                            value: self.last_block.builder.build_int_z_extend(
+                                value,
+                                context.i64_type(),
+                                "CAST -> u64",
+                            ),
+                        },
+                        ValueType::U128 => Value::U128 {
+                            value: self.last_block.builder.build_int_z_extend(
+                                value,
+                                context.i128_type(),
+                                "CAST -> u128",
+                            ),
+                        },
+                        _ => unreachable!(),
+                    })
+                    .handle_float(&|_, value| match to {
+                        ValueType::F32 => Value::F32 {
+                            value: self.last_block.builder.build_float_ext(
+                                value,
+                                context.f32_type(),
+                                "CAST -> f32",
+                            ),
+                        },
+                        ValueType::F64 => Value::F64 {
+                            value: self.last_block.builder.build_float_ext(
+                                value,
+                                context.f64_type(),
+                                "CAST -> f64",
+                            ),
+                        },
+                        _ => unreachable!(),
+                    }),
+            )
+        };
+
+        if value.get_type().get_bitwidth() < value_type.get_bitwidth() {
+            perform_cast(value, value_type)
+        } else if value.get_type().get_bitwidth() > value_type.get_bitwidth() {
+            panic!(
+                "explicit cast required; casting from {} to {} may alter its value",
+                value.get_type(),
+                value_type
+            );
+        } else {
+            value
+        }
+    }
+
+    pub fn get_left_value(
+        &'fnc mut self,
+        context: &'ctx Context,
+        module: &'mdl ModuleGen<'ctx>,
+        ast: &AST,
+    ) -> (ValueType, PointerValue<'ctx>) {
+        // Currently, we only have Ids for left-values.
+        return self.resolve_variable(&ast.children[0].child.as_ref().unwrap().token_content);
     }
 }
