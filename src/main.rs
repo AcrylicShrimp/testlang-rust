@@ -77,6 +77,8 @@ fn do_compile(content: String) {
 
                     module.generate_code(&ast);
 
+                    // println!("{}", module.module.print_to_string());
+
                     // DELETEME: JIT execution.
                     let engine = module
                         .module

@@ -45,10 +45,10 @@ let-statement: KeywordLet Id OpAssign @expression;
 let-statement: KeywordLet Id @type OpAssign @expression;
 
 break-statement: KeywordBreak;
-break-statement: KeywordBreak @break-statement;
+break-statement: KeywordBreak Id;
 
 continue-statement: KeywordContinue;
-continue-statement: KeywordContinue @continue-statement;
+continue-statement: KeywordContinue Id;
 
 type: KeywordVoid;
 type: KeywordBool;

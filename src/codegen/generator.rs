@@ -11,6 +11,7 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::{Context, ContextRef};
 use inkwell::module::Module;
+use inkwell::passes::PassManager;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::BasicValueEnum;
 use inkwell::values::FunctionValue;
@@ -53,6 +54,7 @@ pub struct FuncGen<'ctx> {
     pub loop_label_stack: Vec<(String, usize)>,
     pub loop_statement_entry_stack: Vec<BasicBlock>,
     pub loop_statement_exit_stack: Vec<BasicBlock>,
+    pub loop_statement_scopesize_stack: Vec<usize>,
     pub last_block: BlockGen<'ctx>,
 }
 
@@ -156,6 +158,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> ModuleGen<'ctx> {
             loop_label_stack: Vec::new(),
             loop_statement_entry_stack: Vec::new(),
             loop_statement_exit_stack: Vec::new(),
+            loop_statement_scopesize_stack: Vec::new(),
             last_block: BlockGen::new(self.context, function_with_prototype.1, "entry"),
         };
         func_gen.create_scope(self);
@@ -165,7 +168,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> ModuleGen<'ctx> {
 }
 
 impl<'bdr, 'fnc: 'bdr, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
-    pub fn end_function(mut self) {
+    pub fn end_function(mut self, module: &'mdl ModuleGen<'ctx>) {
         if self.scope_stack.len() != 1 {
             panic!("scope not yet closed.");
         }
@@ -182,6 +185,8 @@ impl<'bdr, 'fnc: 'bdr, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
             panic!("loop statement not yet closed.");
         }
 
+        self.end_scope(module);
+
         let blocks = self.function.get_basic_blocks();
 
         if self.prototype.return_type == ValueType::Void
@@ -196,7 +201,12 @@ impl<'bdr, 'fnc: 'bdr, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
             }
         }
 
-        self.scope_stack.pop();
+        // let pass_mgr = PassManager::<FunctionValue<'ctx>>::create(&module.module);
+        // // pass_mgr.add_aggressive_dce_pass();
+        // // pass_mgr.add_cfg_simplification_pass();
+        // pass_mgr.initialize();
+
+        // pass_mgr.run_on(&self.function);
     }
 
     pub fn create_scope(&'fnc mut self, module: &'mdl ModuleGen<'ctx>) {
@@ -230,6 +240,21 @@ impl<'bdr, 'fnc: 'bdr, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
             vec![self.scope_stack.pop().unwrap().stack_position].as_slice(),
             "stackrestore",
         );
+    }
+
+    pub fn end_scope_runtime(&'fnc mut self, module: &'mdl ModuleGen<'ctx>, count: usize) {
+        for index in 0..self.scope_stack.len() - count {
+            self.last_block.builder.build_call(
+                module
+                    .function_prototype_table
+                    .get("llvm.stackrestore")
+                    .expect("intrinsic function 'llvm.stackrestore' not found.")
+                    .function,
+                vec![self.scope_stack[self.scope_stack.len() - 1 - index].stack_position]
+                    .as_slice(),
+                "stackrestore RUNTIME",
+            );
+        }
     }
 
     pub fn create_variable(
@@ -307,7 +332,7 @@ impl<'mdl, 'ctx: 'mdl> ModuleGen<'ctx> {
 
         self.create_function("main", ValueType::Void, vec![], true)
             .generate_code_statement_list(self.context, self, &ast.children[0])
-            .end_function();
+            .end_function(self);
     }
 }
 
@@ -366,6 +391,12 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
             "with-statement" => unimplemented!(),
             "ret-statement" => unimplemented!(),
             "let-statement" => self.generate_code_statement_let(context, module, &ast.children[0]),
+            "break-statement" => {
+                self.generate_code_statement_break(context, module, &ast.children[0])
+            }
+            "continue-statement" => {
+                self.generate_code_statement_continue(context, module, &ast.children[0])
+            }
             "expression" => {
                 self.generate_code_expression(context, module, &ast.children[0]);
                 self
@@ -486,6 +517,8 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
 
             self.loop_statement_entry_stack.push(loop_block.block);
             self.loop_statement_exit_stack.push(exit_block.block);
+            self.loop_statement_scopesize_stack
+                .push(self.scope_stack.len());
 
             // Loop block.
             self.last_block = loop_block;
@@ -495,6 +528,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
 
             self.loop_statement_entry_stack.pop();
             self.loop_statement_exit_stack.pop();
+            self.loop_statement_scopesize_stack.pop();
 
             // End block.
             self.last_block = BlockGen::new(context, self.function, "LOOP END");
@@ -515,6 +549,8 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
             ));
             self.loop_statement_entry_stack.push(loop_block.block);
             self.loop_statement_exit_stack.push(exit_block.block);
+            self.loop_statement_scopesize_stack
+                .push(self.scope_stack.len());
 
             // Loop block.
             self.last_block = loop_block;
@@ -525,6 +561,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
             self.loop_label_stack.pop();
             self.loop_statement_entry_stack.pop();
             self.loop_statement_exit_stack.pop();
+            self.loop_statement_scopesize_stack.pop();
 
             // End block.
             self.last_block = BlockGen::new(context, self.function, "LOOP END");
@@ -534,6 +571,11 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
             let loop_block = BlockGen::new(context, self.function, "LOOP");
             let exit_block = BlockGen::new(context, self.function, "LOOP EXIT");
             self.last_block.connect_to(&criteria_block);
+
+            self.loop_statement_entry_stack.push(self.last_block.block);
+            self.loop_statement_exit_stack.push(exit_block.block);
+            self.loop_statement_scopesize_stack
+                .push(self.scope_stack.len());
 
             // Criteria block.
             self.last_block = criteria_block;
@@ -553,9 +595,6 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
                     .connect_to_if(value, &loop_block, &exit_block);
             }));
 
-            self.loop_statement_entry_stack.push(self.last_block.block);
-            self.loop_statement_exit_stack.push(exit_block.block);
-
             // Loop block.
             self.last_block = loop_block;
             self = self.generate_code_statement_scope(context, module, &ast.children[2]);
@@ -563,6 +602,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
 
             self.loop_statement_entry_stack.pop();
             self.loop_statement_exit_stack.pop();
+            self.loop_statement_scopesize_stack.pop();
 
             // Exit block.
             self.last_block = BlockGen::new(context, self.function, "LOOP END");
@@ -572,6 +612,11 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
             let loop_block = BlockGen::new(context, self.function, "LOOP");
             let exit_block = BlockGen::new(context, self.function, "LOOP EXIT");
             self.last_block.connect_to(&criteria_block);
+
+            self.loop_statement_entry_stack.push(self.last_block.block);
+            self.loop_statement_exit_stack.push(exit_block.block);
+            self.loop_statement_scopesize_stack
+                .push(self.scope_stack.len());
 
             // Criteria block.
             self.last_block = criteria_block;
@@ -600,8 +645,6 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
                     .clone(),
                 self.loop_statement_entry_stack.len(),
             ));
-            self.loop_statement_entry_stack.push(self.last_block.block);
-            self.loop_statement_exit_stack.push(exit_block.block);
 
             // Loop block.
             self.last_block = loop_block;
@@ -611,6 +654,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
             self.loop_label_stack.pop();
             self.loop_statement_entry_stack.pop();
             self.loop_statement_exit_stack.pop();
+            self.loop_statement_scopesize_stack.pop();
 
             // End block.
             self.last_block = BlockGen::new(context, self.function, "LOOP END");
@@ -667,6 +711,66 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
         } else {
             unimplemented!();
         }
+
+        self
+    }
+
+    pub fn generate_code_statement_break(
+        mut self,
+        context: &'ctx Context,
+        module: &'mdl ModuleGen<'ctx>,
+        ast: &AST,
+    ) -> Self {
+        if ast.children.len() == 1 {
+            self.end_scope_runtime(
+                module,
+                *self
+                    .loop_statement_scopesize_stack
+                    .last()
+                    .expect("wrong usage; break statements can be placed in loop statements"),
+            );
+            self.last_block.connect_to(&BlockGen::from(
+                context,
+                self.loop_statement_exit_stack
+                    .last()
+                    .expect("wrong usage; break statements can be placed in loop statements")
+                    .clone(),
+            ));
+        } else {
+            unimplemented!();
+        }
+
+        self.last_block = BlockGen::new(context, self.function, "BREAK");
+
+        self
+    }
+
+    pub fn generate_code_statement_continue(
+        mut self,
+        context: &'ctx Context,
+        module: &'mdl ModuleGen<'ctx>,
+        ast: &AST,
+    ) -> Self {
+        if ast.children.len() == 1 {
+            self.end_scope_runtime(
+                module,
+                *self
+                    .loop_statement_scopesize_stack
+                    .last()
+                    .expect("wrong usage; break statements can be placed in loop statements"),
+            );
+            self.last_block.connect_to(&BlockGen::from(
+                context,
+                self.loop_statement_entry_stack
+                    .last()
+                    .expect("wrong usage; continue statements can be placed in loop statements")
+                    .clone(),
+            ));
+        } else {
+            unimplemented!();
+        }
+
+        self.last_block = BlockGen::new(context, self.function, "CONTINUE");
 
         self
     }
