@@ -22,16 +22,13 @@ scope-statement: BraceL @statement-list BraceR;
 if-statement: KeywordIf @expression @scope-statement;
 if-statement: KeywordIf @expression @scope-statement KeywordElse @scope-statement;
 if-statement: KeywordIf @expression @scope-statement KeywordElse @if-statement;
-if-statement: Id KeywordAs KeywordIf @expression @scope-statement;
-if-statement: Id KeywordAs KeywordIf @expression @scope-statement KeywordElse @scope-statement;
-if-statement: Id KeywordAs KeywordIf @expression @scope-statement KeywordElse @if-statement;
 
 for-statement: KeywordFor @scope-statement;
 for-statement: KeywordFor @expression @scope-statement;
 for-statement: KeywordFor @for-statement-id-list KeywordIn @expression @scope-statement;
-for-statement: Id KeywordAs KeywordFor @scope-statement;
-for-statement: Id KeywordAs KeywordFor @expression @scope-statement;
-for-statement: Id KeywordAs KeywordFor @for-statement-id-list KeywordIn @expression @scope-statement;
+for-statement: KeywordAs Id KeywordFor @scope-statement;
+for-statement: KeywordAs Id KeywordFor @expression @scope-statement;
+for-statement: KeywordAs Id KeywordFor @for-statement-id-list KeywordIn @expression @scope-statement;
 
 for-statement-id-list: Id;
 for-statement-id-list: @for-statement-id-list Comma Id;
