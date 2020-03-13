@@ -117,7 +117,7 @@ op-bit-and: @op-bit-xor;
 op-bit-and: @op-bit-and OpBitAnd @op-bit-xor;
 
 op-bit-xor: @op-cast;
-op-bit-xor: @op-bit-and OpBitXor @op-cast;
+op-bit-xor: @op-bit-xor OpBitXor @op-cast;
 
 op-cast: @op-single;
 op-cast: @op-cast KeywordAs @type;

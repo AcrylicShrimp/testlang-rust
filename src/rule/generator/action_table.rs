@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::vec::Vec;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, PartialEq)]
 pub enum ActionType {
 	Shift,
 	Reduce,
@@ -16,7 +16,7 @@ pub enum ActionType {
 	Accept,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, PartialEq)]
 pub struct Action {
 	pub action_type: ActionType,
 	pub next_state: usize,
@@ -53,66 +53,102 @@ impl Generator {
 
 				if rule.seen_index < src_rule.item_vec.len()
 					&& src_rule.item_vec[rule.seen_index].item_type == RuleItemType::Literal
-				// Shift
 				{
-					self.action_table[state_index].literal.insert(
-						src_rule.item_vec[rule.seen_index].item_content.clone(),
-						Action {
-							action_type: ActionType::Shift,
-							next_state: *self
-								.state_graph
-								.state_transition_map
-								.get(&(
-									state_index,
-									src_rule.item_vec[rule.seen_index].item_content.clone(),
-								))
-								.unwrap(),
-							reduce_count: 0,
-							reduce_rule_name: "".to_string(),
-						},
-					);
+					// Shift
+					let table = &mut self.action_table[state_index].literal;
+					let item = src_rule.item_vec[rule.seen_index].item_content.clone();
+					let action = Action {
+						action_type: ActionType::Shift,
+						next_state: *self
+							.state_graph
+							.state_transition_map
+							.get(&(
+								state_index,
+								src_rule.item_vec[rule.seen_index].item_content.clone(),
+							))
+							.unwrap(),
+						reduce_count: 0,
+						reduce_rule_name: "".to_string(),
+					};
+
+					if table.contains_key(&item) {
+						let old_action = table.get(&item).unwrap();
+
+						if action != *old_action {
+							panic!("ambiguous syntax; shift conflict. {}", src_rule.name);
+						}
+					} else {
+						table.insert(item, action);
+					}
 				} else if rule.seen_index < src_rule.item_vec.len()
 					&& src_rule.item_vec[rule.seen_index].item_type == RuleItemType::Id
-				// Goto
 				{
-					self.action_table[state_index].id.insert(
-						src_rule.item_vec[rule.seen_index].item_content.clone(),
-						Action {
-							action_type: ActionType::Goto,
-							next_state: *self
-								.state_graph
-								.state_transition_map
-								.get(&(
-									state_index,
-									src_rule.item_vec[rule.seen_index].item_content.clone(),
-								))
-								.unwrap(),
-							reduce_count: 0,
-							reduce_rule_name: "".to_string(),
-						},
-					);
+					// Goto
+					let table = &mut self.action_table[state_index].id;
+					let item = src_rule.item_vec[rule.seen_index].item_content.clone();
+					let action = Action {
+						action_type: ActionType::Goto,
+						next_state: *self
+							.state_graph
+							.state_transition_map
+							.get(&(
+								state_index,
+								src_rule.item_vec[rule.seen_index].item_content.clone(),
+							))
+							.unwrap(),
+						reduce_count: 0,
+						reduce_rule_name: "".to_string(),
+					};
+
+					if table.contains_key(&item) {
+						let old_action = table.get(&item).unwrap();
+
+						if action != *old_action {
+							panic!("ambiguous syntax; goto conflict. {}", src_rule.name);
+						}
+					} else {
+						table.insert(item, action);
+					}
 				} else if rule.lookahead == "" && src_rule.name == "__root" {
-					// Accept
-					self.action_table[state_index].literal.insert(
-						"".to_string(),
-						Action {
-							action_type: ActionType::Accept,
-							next_state: 0,
-							reduce_count: 0,
-							reduce_rule_name: "".to_string(),
-						},
-					);
+					//Accept
+					let table = &mut self.action_table[state_index].literal;
+					let item = "";
+					let action = Action {
+						action_type: ActionType::Accept,
+						next_state: 0,
+						reduce_count: 0,
+						reduce_rule_name: "".to_string(),
+					};
+
+					if table.contains_key(item) {
+						let old_action = table.get(item).unwrap();
+
+						if action != *old_action {
+							panic!("ambiguous syntax; accept conflict. {}", src_rule.name);
+						}
+					} else {
+						table.insert(item.to_owned(), action);
+					}
 				} else {
 					// Reduce
-					self.action_table[state_index].literal.insert(
-						rule.lookahead.clone(),
-						Action {
-							action_type: ActionType::Reduce,
-							next_state: 0,
-							reduce_count: src_rule.item_vec.len(),
-							reduce_rule_name: src_rule.name.clone(),
-						},
-					);
+					let table = &mut self.action_table[state_index].literal;
+					let item = rule.lookahead.clone();
+					let action = Action {
+						action_type: ActionType::Reduce,
+						next_state: 0,
+						reduce_count: src_rule.item_vec.len(),
+						reduce_rule_name: src_rule.name.clone(),
+					};
+
+					if table.contains_key(&item) {
+						let old_action = table.get(&item).unwrap();
+
+						if action != *old_action {
+							panic!("ambiguous syntax; reduce conflict. {}", src_rule.name);
+						}
+					} else {
+						table.insert(item, action);
+					}
 				}
 			}
 		}

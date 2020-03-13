@@ -24,7 +24,7 @@ struct ActionTableWrapper {
 }
 
 fn main() {
-    generate_action_table();
+    // generate_action_table();
     match fs::read_to_string("sources/test.tl") {
         Ok(content) => do_compile(content),
         Err(err) => println!("{}", err),
