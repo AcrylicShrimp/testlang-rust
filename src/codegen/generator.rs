@@ -69,7 +69,7 @@ pub struct BlockGen<'ctx> {
 
 pub struct ScopeGen<'ctx> {
     pub variable_map: HashMap<String, (ValueType, PointerValue<'ctx>)>,
-    pub stack_position: BasicValueEnum<'ctx>,
+    pub stack_position: Option<BasicValueEnum<'ctx>>,
 }
 
 impl<'ctx> Generator {
@@ -173,7 +173,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> ModuleGen<'ctx> {
             loop_statement_scopesize_stack: Vec::new(),
             last_block: BlockGen::new(self.context, function_with_prototype.1, "entry"),
         };
-        func_gen.create_scope(self);
+        func_gen.create_scope(self, false);
 
         for index in 0..func_gen.prototype.param_type_vec.len() {
             let variable = func_gen.create_variable(
@@ -209,7 +209,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> ModuleGen<'ctx> {
             );
         }
 
-        func_gen.create_scope(self);
+        func_gen.create_scope(self, false);
 
         func_gen
     }
@@ -244,65 +244,78 @@ impl<'bdr, 'fnc: 'bdr, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
             self.last_block.builder.build_return(None);
         }
 
-        for block in self.function.get_basic_blocks() {
-            if block.get_terminator().is_none() {
-                panic!("non-return path detected.");
-            }
-        }
-
-        // let pass_mgr = PassManager::<FunctionValue<'ctx>>::create(&module.module);
-        // // pass_mgr.add_aggressive_dce_pass();
-        // // pass_mgr.add_cfg_simplification_pass();
-        // pass_mgr.initialize();
-
-        // pass_mgr.run_on(&self.function);
+        let pass_mgr = PassManager::<FunctionValue<'ctx>>::create(&module.module);
+        pass_mgr.add_cfg_simplification_pass();
+        pass_mgr.add_verifier_pass();
+        pass_mgr.initialize();
+        pass_mgr.run_on(&self.function);
     }
 
-    pub fn create_scope(&'fnc mut self, module: &'mdl mut ModuleGen<'ctx>) {
+    pub fn create_scope(
+        &'fnc mut self,
+        module: &'mdl mut ModuleGen<'ctx>,
+        need_explicit_removal: bool,
+    ) {
         self.scope_stack.push(ScopeGen {
             variable_map: HashMap::new(),
-            stack_position: self
-                .last_block
-                .builder
-                .build_call(
-                    module
-                        .function_prototype_table
-                        .get("llvm.stacksave")
-                        .expect("intrinsic function 'llvm.stacksave' not found.")
-                        .function,
-                    vec![].as_slice(),
-                    "stacksave",
+            stack_position: if need_explicit_removal {
+                Some(
+                    self.last_block
+                        .builder
+                        .build_call(
+                            module
+                                .function_prototype_table
+                                .get("llvm.stacksave")
+                                .expect("intrinsic function 'llvm.stacksave' not found.")
+                                .function,
+                            vec![].as_slice(),
+                            "stacksave",
+                        )
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap(),
                 )
-                .try_as_basic_value()
-                .left()
-                .unwrap(),
+            } else {
+                None
+            },
         });
     }
 
     pub fn end_scope(&'fnc mut self, module: &'mdl mut ModuleGen<'ctx>) {
-        self.last_block.builder.build_call(
-            module
-                .function_prototype_table
-                .get("llvm.stackrestore")
-                .expect("intrinsic function 'llvm.stackrestore' not found.")
-                .function,
-            vec![self.scope_stack.pop().unwrap().stack_position].as_slice(),
-            "stackrestore",
-        );
-    }
-
-    pub fn end_scope_runtime(&'fnc mut self, module: &'mdl mut ModuleGen<'ctx>, count: usize) {
-        for index in 0..self.scope_stack.len() - count {
+        if self.scope_stack.last().unwrap().stack_position.is_some() {
             self.last_block.builder.build_call(
                 module
                     .function_prototype_table
                     .get("llvm.stackrestore")
                     .expect("intrinsic function 'llvm.stackrestore' not found.")
                     .function,
-                vec![self.scope_stack[self.scope_stack.len() - 1 - index].stack_position]
-                    .as_slice(),
-                "stackrestore RUNTIME",
+                vec![self.scope_stack.pop().unwrap().stack_position.unwrap()].as_slice(),
+                "stackrestore",
             );
+        } else {
+            self.scope_stack.pop();
+        }
+    }
+
+    pub fn end_scope_runtime(&'fnc mut self, module: &'mdl mut ModuleGen<'ctx>, count: usize) {
+        for index in 0..self.scope_stack.len() - count {
+            if self.scope_stack[self.scope_stack.len() - 1 - index]
+                .stack_position
+                .is_some()
+            {
+                self.last_block.builder.build_call(
+                    module
+                        .function_prototype_table
+                        .get("llvm.stackrestore")
+                        .expect("intrinsic function 'llvm.stackrestore' not found.")
+                        .function,
+                    vec![self.scope_stack[self.scope_stack.len() - 1 - index]
+                        .stack_position
+                        .unwrap()]
+                    .as_slice(),
+                    "stackrestore RUNTIME",
+                );
+            }
         }
     }
 
@@ -433,12 +446,12 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
 
         match ast.children[0].name.as_ref() {
             "scope-statement" => {
-                self.generate_code_statement_scope(context, module, &ast.children[0])
+                self.generate_code_statement_scope(context, module, &ast.children[0], true)
             }
             "if-statement" => self.generate_code_statement_if(context, module, &ast.children[0]),
             "for-statement" => self.generate_code_statement_for(context, module, &ast.children[0]),
             "with-statement" => unimplemented!(),
-            "ret-statement" => unimplemented!(),
+            "ret-statement" => self.generate_code_statement_ret(context, module, &ast.children[0]),
             "let-statement" => self.generate_code_statement_let(context, module, &ast.children[0]),
             "break-statement" => {
                 self.generate_code_statement_break(context, module, &ast.children[0])
@@ -462,13 +475,14 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
         context: &'ctx Context,
         module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
+        need_explicit_removal: bool,
     ) -> Self {
         if ast.name != "scope-statement" {
             panic!("scope-statement AST expected, got {}.", ast.name);
         }
 
         if ast.children.len() == 3 {
-            self.create_scope(module);
+            self.create_scope(module, need_explicit_removal);
             self = self.generate_code_statement_list(context, module, &ast.children[1]);
             self.end_scope(module);
         }
@@ -503,7 +517,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
             self.last_block = BlockGen::new(context, self.function, "THEN");
             let temp_then_block = BlockGen::from(context, self.last_block.block);
 
-            self = self.generate_code_statement_scope(context, module, &ast.children[2]);
+            self = self.generate_code_statement_scope(context, module, &ast.children[2], true);
 
             let temp_then_block_end = BlockGen::from(context, self.last_block.block);
 
@@ -522,7 +536,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
             self.last_block = BlockGen::new(context, self.function, "THEN");
             let temp_then_block = BlockGen::from(context, self.last_block.block);
 
-            self = self.generate_code_statement_scope(context, module, &ast.children[2]);
+            self = self.generate_code_statement_scope(context, module, &ast.children[2], true);
 
             let temp_then_block_end = BlockGen::from(context, self.last_block.block);
 
@@ -531,7 +545,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
             let temp_else_block = BlockGen::from(context, self.last_block.block);
 
             self = if ast.children[4].name == "scope-statement" {
-                self.generate_code_statement_scope(context, module, &ast.children[4])
+                self.generate_code_statement_scope(context, module, &ast.children[4], true)
             } else {
                 self.generate_code_statement_if(context, module, &ast.children[4])
             };
@@ -575,7 +589,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
             // Loop block.
             self.last_block = loop_block;
             let temp_loop_block = BlockGen::from(context, self.last_block.block);
-            self = self.generate_code_statement_scope(context, module, &ast.children[1]);
+            self = self.generate_code_statement_scope(context, module, &ast.children[1], true);
             self.last_block.connect_to(&temp_loop_block);
 
             self.loop_statement_entry_stack.pop();
@@ -607,7 +621,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
             // Loop block.
             self.last_block = loop_block;
             let temp_loop_block = BlockGen::from(context, self.last_block.block);
-            self = self.generate_code_statement_scope(context, module, &ast.children[3]);
+            self = self.generate_code_statement_scope(context, module, &ast.children[3], true);
             self.last_block.connect_to(&temp_loop_block);
 
             self.loop_label_stack.pop();
@@ -649,7 +663,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
 
             // Loop block.
             self.last_block = loop_block;
-            self = self.generate_code_statement_scope(context, module, &ast.children[2]);
+            self = self.generate_code_statement_scope(context, module, &ast.children[2], true);
             self.last_block.connect_to(&temp_criteria_block);
 
             self.loop_statement_entry_stack.pop();
@@ -700,7 +714,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
 
             // Loop block.
             self.last_block = loop_block;
-            self = self.generate_code_statement_scope(context, module, &ast.children[4]);
+            self = self.generate_code_statement_scope(context, module, &ast.children[4], true);
             self.last_block.connect_to(&temp_criteria_block);
 
             self.loop_label_stack.pop();
@@ -714,6 +728,43 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
         } else {
             unimplemented!();
         }
+
+        self
+    }
+
+    pub fn generate_code_statement_ret(
+        mut self,
+        context: &'ctx Context,
+        module: &'mdl mut ModuleGen<'ctx>,
+        ast: &AST,
+    ) -> Self {
+        if ast.children.len() == 1 {
+            if self.prototype.return_type != ValueType::Void {
+                panic!(
+                    "type error; {} value must be provided to return.",
+                    self.prototype.return_type
+                );
+            }
+
+            self.last_block.builder.build_return(None);
+        } else {
+            let mut return_value = self.generate_code_expression(context, module, &ast.children[1]);
+            return_value =
+                self.match_type_single(context, return_value, self.prototype.return_type);
+
+            return_value.invoke_handler(
+                ValueHandler::new()
+                    .handle_bool(&|_, value| self.last_block.builder.build_return(Some(&value)))
+                    .handle_int(&|_, value| self.last_block.builder.build_return(Some(&value)))
+                    .handle_unsigned_int(&|_, value| {
+                        self.last_block.builder.build_return(Some(&value))
+                    })
+                    .handle_float(&|_, value| self.last_block.builder.build_return(Some(&value)))
+                    .handle_str(&|_, value| self.last_block.builder.build_return(Some(&value))),
+            );
+        }
+
+        self.last_block = BlockGen::new(context, self.function, "RET");
 
         self
     }
@@ -868,7 +919,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
                     vec![],
                     false,
                 )
-                .generate_code_statement_scope(context, module, &ast.children[5])
+                .generate_code_statement_scope(context, module, &ast.children[5], false)
                 .end_function(module);
         } else {
             let return_type = ast.children[4].children[0]
@@ -956,7 +1007,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
                     parameter_name_vec,
                     false,
                 )
-                .generate_code_statement_scope(context, module, &ast.children[6])
+                .generate_code_statement_scope(context, module, &ast.children[6], false)
                 .end_function(module);
         }
 

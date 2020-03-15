@@ -69,7 +69,7 @@ fn do_compile(content: String) {
                     let mut codegen = CodeGenerator::new();
                     let mut module = codegen.create_module("test");
 
-                    // DELETEME: Addings some c-std functions.
+                    // DELETEME: Adds some c-std functions.
                     module.decl_function(
                         "printf",
                         ValueType::I32,
