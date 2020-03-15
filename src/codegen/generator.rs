@@ -25,8 +25,11 @@ use inkwell::OptimizationLevel;
 use std::boxed::Box;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::rc::Rc;
 use std::vec::Vec;
+
+use itertools::Itertools;
 
 pub struct Generator {
     pub context: Context,
@@ -43,6 +46,7 @@ pub struct ModuleGen<'ctx> {
 pub struct FuncPrototype<'ctx> {
     pub return_type: ValueType,
     pub param_type_vec: Vec<ValueType>,
+    pub param_name_vec: Vec<String>,
     pub variadic_param: bool,
     pub function: FunctionValue<'ctx>,
 }
@@ -84,11 +88,12 @@ impl<'ctx> Generator {
         };
 
         // LLVM Intrinsic functions.
-        module.decl_function("llvm.stacksave", ValueType::Str, vec![], false);
+        module.decl_function("llvm.stacksave", ValueType::Str, vec![], vec![], false);
         module.decl_function(
             "llvm.stackrestore",
             ValueType::Void,
             vec![ValueType::Str],
+            vec!["ptr".to_owned()],
             false,
         );
 
@@ -102,6 +107,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> ModuleGen<'ctx> {
         name: &str,
         return_type: ValueType,
         param_type_vec: Vec<ValueType>,
+        param_name_vec: Vec<String>,
         variadic_param: bool,
     ) -> (FuncPrototype<'ctx>, FunctionValue<'ctx>) {
         let param_basic_type_vec = param_type_vec
@@ -127,6 +133,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> ModuleGen<'ctx> {
         let function_prototype = FuncPrototype {
             return_type: return_type,
             param_type_vec: param_type_vec,
+            param_name_vec: param_name_vec,
             variadic_param: variadic_param,
             function: function.clone(),
         };
@@ -142,15 +149,20 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> ModuleGen<'ctx> {
         name: &str,
         return_type: ValueType,
         param_type_vec: Vec<ValueType>,
+        param_name_vec: Vec<String>,
         variadic_param: bool,
     ) -> FuncGen<'ctx> {
         if self.function_prototype_table.contains_key(name) {
             panic!("function {} is already exists.", name);
         }
 
-        let function_with_prototype =
-            self.decl_function(name, return_type, param_type_vec, variadic_param);
-
+        let function_with_prototype = self.decl_function(
+            name,
+            return_type,
+            param_type_vec,
+            param_name_vec,
+            variadic_param,
+        );
         let mut func_gen = FuncGen {
             function: function_with_prototype.1,
             prototype: function_with_prototype.0,
@@ -163,13 +175,49 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> ModuleGen<'ctx> {
         };
         func_gen.create_scope(self);
 
+        for index in 0..func_gen.prototype.param_type_vec.len() {
+            let variable = func_gen.create_variable(
+                self.context,
+                func_gen.prototype.param_name_vec[index].clone(),
+                func_gen.prototype.param_type_vec[index],
+            );
+
+            Value::from_basic_value(
+                func_gen.prototype.param_type_vec[index],
+                func_gen
+                    .function
+                    .get_nth_param(index.try_into().unwrap())
+                    .unwrap(),
+            )
+            .invoke_handler(
+                ValueHandler::new()
+                    .handle_bool(&mut |_, value| {
+                        func_gen.last_block.builder.build_store(variable, value);
+                    })
+                    .handle_int(&|_, value| {
+                        func_gen.last_block.builder.build_store(variable, value);
+                    })
+                    .handle_unsigned_int(&|_, value| {
+                        func_gen.last_block.builder.build_store(variable, value);
+                    })
+                    .handle_float(&|_, value| {
+                        func_gen.last_block.builder.build_store(variable, value);
+                    })
+                    .handle_str(&|_, value| {
+                        func_gen.last_block.builder.build_store(variable, value);
+                    }),
+            );
+        }
+
+        func_gen.create_scope(self);
+
         func_gen
     }
 }
 
 impl<'bdr, 'fnc: 'bdr, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
-    pub fn end_function(mut self, module: &'mdl ModuleGen<'ctx>) {
-        if self.scope_stack.len() != 1 {
+    pub fn end_function(mut self, module: &'mdl mut ModuleGen<'ctx>) {
+        if self.scope_stack.len() != 2 {
             panic!("scope not yet closed.");
         }
 
@@ -185,6 +233,7 @@ impl<'bdr, 'fnc: 'bdr, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
             panic!("loop statement not yet closed.");
         }
 
+        self.end_scope(module);
         self.end_scope(module);
 
         let blocks = self.function.get_basic_blocks();
@@ -209,7 +258,7 @@ impl<'bdr, 'fnc: 'bdr, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
         // pass_mgr.run_on(&self.function);
     }
 
-    pub fn create_scope(&'fnc mut self, module: &'mdl ModuleGen<'ctx>) {
+    pub fn create_scope(&'fnc mut self, module: &'mdl mut ModuleGen<'ctx>) {
         self.scope_stack.push(ScopeGen {
             variable_map: HashMap::new(),
             stack_position: self
@@ -230,7 +279,7 @@ impl<'bdr, 'fnc: 'bdr, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
         });
     }
 
-    pub fn end_scope(&'fnc mut self, module: &'mdl ModuleGen<'ctx>) {
+    pub fn end_scope(&'fnc mut self, module: &'mdl mut ModuleGen<'ctx>) {
         self.last_block.builder.build_call(
             module
                 .function_prototype_table
@@ -242,7 +291,7 @@ impl<'bdr, 'fnc: 'bdr, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
         );
     }
 
-    pub fn end_scope_runtime(&'fnc mut self, module: &'mdl ModuleGen<'ctx>, count: usize) {
+    pub fn end_scope_runtime(&'fnc mut self, module: &'mdl mut ModuleGen<'ctx>, count: usize) {
         for index in 0..self.scope_stack.len() - count {
             self.last_block.builder.build_call(
                 module
@@ -330,7 +379,7 @@ impl<'mdl, 'ctx: 'mdl> ModuleGen<'ctx> {
             panic!("module AST expected, got {}.", ast.name);
         }
 
-        self.create_function("main", ValueType::Void, vec![], true)
+        self.create_function("main", ValueType::Void, vec![], vec![], true)
             .generate_code_statement_list(self.context, self, &ast.children[0])
             .end_function(self);
     }
@@ -340,7 +389,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_statement_list(
         mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Self {
         if ast.name != "statement-list" {
@@ -375,7 +424,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_statement(
         mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Self {
         if ast.name != "statement" {
@@ -397,6 +446,9 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
             "continue-statement" => {
                 self.generate_code_statement_continue(context, module, &ast.children[0])
             }
+            "func-def-statement" => {
+                self.generate_code_statement_func_def(context, module, &ast.children[0])
+            }
             "expression" => {
                 self.generate_code_expression(context, module, &ast.children[0]);
                 self
@@ -408,7 +460,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_statement_scope(
         mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Self {
         if ast.name != "scope-statement" {
@@ -427,7 +479,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_statement_if(
         mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Self {
         if ast.name != "if-statement" {
@@ -503,7 +555,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_statement_for(
         mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Self {
         if ast.name != "for-statement" {
@@ -669,7 +721,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_statement_let(
         mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Self {
         if ast.children.len() == 4 {
@@ -718,7 +770,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_statement_break(
         mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Self {
         if ast.children.len() == 1 {
@@ -748,7 +800,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_statement_continue(
         mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Self {
         if ast.children.len() == 1 {
@@ -775,10 +827,146 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
         self
     }
 
+    pub fn generate_code_statement_func_def(
+        mut self,
+        context: &'ctx Context,
+        module: &'mdl mut ModuleGen<'ctx>,
+        ast: &AST,
+    ) -> Self {
+        if ast.children.len() == 6 {
+            let return_type = ast.children[3].children[0]
+                .child
+                .as_ref()
+                .unwrap()
+                .token_type;
+
+            let return_value_type = match return_type {
+                TokenType::KeywordVoid => ValueType::Void,
+                TokenType::KeywordBool => ValueType::Bool,
+                TokenType::KeywordI8 => ValueType::I8,
+                TokenType::KeywordI16 => ValueType::I16,
+                TokenType::KeywordI32 => ValueType::I32,
+                TokenType::KeywordI64 => ValueType::I64,
+                TokenType::KeywordI128 => ValueType::I128,
+                TokenType::KeywordU8 => ValueType::U8,
+                TokenType::KeywordU16 => ValueType::U16,
+                TokenType::KeywordU32 => ValueType::U32,
+                TokenType::KeywordU64 => ValueType::U64,
+                TokenType::KeywordU128 => ValueType::U128,
+                TokenType::KeywordF16 => ValueType::F16,
+                TokenType::KeywordF32 => ValueType::F32,
+                TokenType::KeywordF64 => ValueType::F64,
+                TokenType::KeywordStr => ValueType::Str,
+                _ => unreachable!(),
+            };
+
+            module
+                .create_function(
+                    &ast.children[0].child.as_ref().unwrap().token_content,
+                    return_value_type,
+                    vec![],
+                    vec![],
+                    false,
+                )
+                .generate_code_statement_scope(context, module, &ast.children[5])
+                .end_function(module);
+        } else {
+            let return_type = ast.children[4].children[0]
+                .child
+                .as_ref()
+                .unwrap()
+                .token_type;
+
+            let return_value_type = match return_type {
+                TokenType::KeywordVoid => ValueType::Void,
+                TokenType::KeywordBool => ValueType::Bool,
+                TokenType::KeywordI8 => ValueType::I8,
+                TokenType::KeywordI16 => ValueType::I16,
+                TokenType::KeywordI32 => ValueType::I32,
+                TokenType::KeywordI64 => ValueType::I64,
+                TokenType::KeywordI128 => ValueType::I128,
+                TokenType::KeywordU8 => ValueType::U8,
+                TokenType::KeywordU16 => ValueType::U16,
+                TokenType::KeywordU32 => ValueType::U32,
+                TokenType::KeywordU64 => ValueType::U64,
+                TokenType::KeywordU128 => ValueType::U128,
+                TokenType::KeywordF16 => ValueType::F16,
+                TokenType::KeywordF32 => ValueType::F32,
+                TokenType::KeywordF64 => ValueType::F64,
+                TokenType::KeywordStr => ValueType::Str,
+                _ => unreachable!(),
+            };
+
+            let mut parameter_type_vec: Vec<ValueType> = Vec::new();
+            let mut parameter_name_vec: Vec<String> = Vec::new();
+            let mut parameter_stack: Vec<&AST> = ast.children[2].children.iter().rev().collect();
+
+            while parameter_stack.last().unwrap().name == "func-def-statement-param-list" {
+                let mut parameter_vec: Vec<&AST> = parameter_stack
+                    .pop()
+                    .unwrap()
+                    .children
+                    .iter()
+                    .rev()
+                    .collect();
+
+                parameter_stack.append(&mut parameter_vec);
+            }
+
+            for (id, ty) in parameter_stack
+                .into_iter()
+                .rev()
+                .filter(|ast| ast.name != "Comma")
+                .tuples()
+            {
+                let param_type = ty.children[0].child.as_ref().unwrap().token_type;
+
+                if param_type == TokenType::KeywordVoid {
+                    panic!("wrong type; {} cannot be used here", ValueType::Void);
+                }
+
+                let param_value_type = match param_type {
+                    TokenType::KeywordBool => ValueType::Bool,
+                    TokenType::KeywordI8 => ValueType::I8,
+                    TokenType::KeywordI16 => ValueType::I16,
+                    TokenType::KeywordI32 => ValueType::I32,
+                    TokenType::KeywordI64 => ValueType::I64,
+                    TokenType::KeywordI128 => ValueType::I128,
+                    TokenType::KeywordU8 => ValueType::U8,
+                    TokenType::KeywordU16 => ValueType::U16,
+                    TokenType::KeywordU32 => ValueType::U32,
+                    TokenType::KeywordU64 => ValueType::U64,
+                    TokenType::KeywordU128 => ValueType::U128,
+                    TokenType::KeywordF16 => ValueType::F16,
+                    TokenType::KeywordF32 => ValueType::F32,
+                    TokenType::KeywordF64 => ValueType::F64,
+                    TokenType::KeywordStr => ValueType::Str,
+                    _ => unreachable!(),
+                };
+
+                parameter_type_vec.push(param_value_type);
+                parameter_name_vec.push(id.child.as_ref().unwrap().token_content.clone());
+            }
+
+            module
+                .create_function(
+                    &ast.children[0].child.as_ref().unwrap().token_content,
+                    return_value_type,
+                    parameter_type_vec,
+                    parameter_name_vec,
+                    false,
+                )
+                .generate_code_statement_scope(context, module, &ast.children[6])
+                .end_function(module);
+        }
+
+        self
+    }
+
     pub fn generate_code_expression(
         &'fnc mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Value<'ctx> {
         match ast.name.as_ref() {
@@ -883,7 +1071,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_expression_assignment(
         &'fnc mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Value<'ctx> {
         let mut value = self.generate_code_expression(context, module, &ast.children[2]);
@@ -1492,7 +1680,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_expression_op_or(
         &'fnc mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Value<'ctx> {
         let lhs = self.generate_code_expression(context, module, &ast.children[0]);
@@ -1525,7 +1713,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_expression_op_and(
         &'fnc mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Value<'ctx> {
         let lhs = self.generate_code_expression(context, module, &ast.children[0]);
@@ -1558,7 +1746,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_expression_op_cmp(
         &'fnc mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Value<'ctx> {
         let mut lhs = self.generate_code_expression(context, module, &ast.children[0]);
@@ -1667,7 +1855,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_expression_op_addsub(
         &'fnc mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Value<'ctx> {
         let mut lhs = self.generate_code_expression(context, module, &ast.children[0]);
@@ -1860,7 +2048,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_expression_op_muldivmod(
         &'fnc mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Value<'ctx> {
         let mut lhs = self.generate_code_expression(context, module, &ast.children[0]);
@@ -2131,7 +2319,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_expression_op_shift(
         &'fnc mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Value<'ctx> {
         let mut lhs = self.generate_code_expression(context, module, &ast.children[0]);
@@ -2289,7 +2477,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_expression_op_bit_or(
         &'fnc mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Value<'ctx> {
         let mut lhs = self.generate_code_expression(context, module, &ast.children[0]);
@@ -2405,7 +2593,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_expression_op_bit_and(
         &'fnc mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Value<'ctx> {
         let mut lhs = self.generate_code_expression(context, module, &ast.children[0]);
@@ -2521,7 +2709,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_expression_op_bit_xor(
         &'fnc mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Value<'ctx> {
         let mut lhs = self.generate_code_expression(context, module, &ast.children[0]);
@@ -2637,7 +2825,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_expression_op_cast(
         &'fnc mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Value<'ctx> {
         let cast_type = ast.children[2].children[0]
@@ -2647,10 +2835,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
             .token_type;
 
         if cast_type == TokenType::KeywordVoid {
-            panic!(
-                "type error; unable to perform cast to {}s.",
-                ValueType::Void
-            );
+            panic!("type error; unable to perform cast to {}s", ValueType::Void);
         }
 
         let operand = self.generate_code_expression(context, module, &ast.children[0]);
@@ -3394,7 +3579,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_expression_op_single(
         &'fnc mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Value<'ctx> {
         match ast.children[0].child.as_ref().unwrap().token_type {
@@ -3411,7 +3596,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_expression_op_neg(
         &'fnc mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Value<'ctx> {
         let lhs = self.generate_code_expression(context, module, &ast.children[1]);
@@ -3489,7 +3674,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_expression_op_not(
         &'fnc mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Value<'ctx> {
         let lhs = self.generate_code_expression(context, module, &ast.children[1]);
@@ -3516,7 +3701,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn generate_code_expression_op_bit_not(
         &'fnc mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Value<'ctx> {
         let lhs = self.generate_code_expression(context, module, &ast.children[1]);
@@ -3578,7 +3763,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     fn generate_code_expression_function_call(
         &'fnc mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Value<'ctx> {
         let mut parameter_value_vec: Vec<Value<'ctx>> = Vec::new();
@@ -3665,7 +3850,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     fn generate_code_expression_left_value(
         &'fnc mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Value<'ctx> {
         let variable_name = &ast.children[0].child.as_ref().unwrap().token_content;
@@ -3680,7 +3865,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     fn generate_code_expression_literal(
         &'fnc mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> Value<'ctx> {
         let content = &ast.children[0].child.as_ref().unwrap().token_content;
@@ -3950,7 +4135,7 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
     pub fn get_left_value(
         &'fnc mut self,
         context: &'ctx Context,
-        module: &'mdl ModuleGen<'ctx>,
+        module: &'mdl mut ModuleGen<'ctx>,
         ast: &AST,
     ) -> (ValueType, PointerValue<'ctx>) {
         // Currently, we only have Ids for left-values.

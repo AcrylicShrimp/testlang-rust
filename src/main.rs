@@ -70,10 +70,28 @@ fn do_compile(content: String) {
                     let mut module = codegen.create_module("test");
 
                     // DELETEME: Addings some c-std functions.
-                    module.decl_function("printf", ValueType::I32, vec![ValueType::Str], true);
-                    module.decl_function("rand", ValueType::I32, vec![], false);
-                    module.decl_function("srand", ValueType::Void, vec![ValueType::U64], false);
-                    module.decl_function("time", ValueType::U64, vec![ValueType::U64], false);
+                    module.decl_function(
+                        "printf",
+                        ValueType::I32,
+                        vec![ValueType::Str],
+                        vec!["format".to_owned()],
+                        true,
+                    );
+                    module.decl_function("rand", ValueType::I32, vec![], vec![], false);
+                    module.decl_function(
+                        "srand",
+                        ValueType::Void,
+                        vec![ValueType::U64],
+                        vec!["seed".to_owned()],
+                        false,
+                    );
+                    module.decl_function(
+                        "time",
+                        ValueType::U64,
+                        vec![ValueType::U64],
+                        vec!["t".to_owned()],
+                        false,
+                    );
 
                     module.generate_code(&ast);
 

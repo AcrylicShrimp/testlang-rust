@@ -22,6 +22,7 @@ pub enum TokenType {
 	Colon,           // :
 	Semicolon,       // ;
 	Question,        // ?
+	Arrow,           // =>
 	ParenL,          // (
 	ParenR,          // )
 	BraceL,          // {
@@ -31,7 +32,7 @@ pub enum TokenType {
 	LiteralBool,     // true false
 	LiteralInteger,  // +1
 	LiteralDecimal,  // 1.e-1
-	LiteralString,   //
+	LiteralString,   // '...'
 	OpAdd,           // +
 	OpSub,           // -
 	OpMul,           // *
@@ -71,7 +72,6 @@ pub enum TokenType {
 	KeywordRet,      // ret
 	KeywordBreak,    // break
 	KeywordContinue, // continue
-	KeywordSkip,     // skip
 	KeywordIf,       // if
 	KeywordElse,     // else
 	KeywordFor,      // for
@@ -467,6 +467,10 @@ impl Lexer {
 				'=' => {
 					self.next_character(AdvanceMode::Pre);
 					return return_token(TokenType::OpEq, "==".to_string());
+				}
+				'>' => {
+					self.next_character(AdvanceMode::Pre);
+					return return_token(TokenType::Arrow, "=>".to_string());
 				}
 				_ => {
 					return return_token(TokenType::OpAssign, "=".to_string());

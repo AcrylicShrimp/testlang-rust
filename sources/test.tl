@@ -1,11 +1,6 @@
 
-let counter = 0;
-
-for counter < 100 {
-	if counter % 2 == 0 {
-		printf('[VALID ITER] ');
-	}
-
-	printf('loop!!!! #%d\n', counter);
-	counter += 1;
+test(i i32) void => {
+	printf('%d\n', i);
 }
+
+test(10);

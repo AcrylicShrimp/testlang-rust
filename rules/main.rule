@@ -14,6 +14,7 @@ statement: @ret-statement Semicolon;
 statement: @let-statement Semicolon;
 statement: @break-statement Semicolon;
 statement: @continue-statement Semicolon;
+statement: @func-def-statement;
 statement: @expression Semicolon;
 
 scope-statement: BraceL BraceR;
@@ -49,6 +50,15 @@ break-statement: KeywordBreak Id;
 
 continue-statement: KeywordContinue;
 continue-statement: KeywordContinue Id;
+
+lambda-func-def-statement: ParenL ParenR @type Arrow @scope-statement;
+lambda-func-def-statement: ParenL @func-def-statement-param-list ParenR @type Arrow @scope-statement;
+
+func-def-statement: Id ParenL ParenR @type Arrow @scope-statement;
+func-def-statement: Id ParenL @func-def-statement-param-list ParenR @type Arrow @scope-statement;
+
+func-def-statement-param-list: Id @type;
+func-def-statement-param-list: @func-def-statement-param-list Comma Id @type;
 
 type: KeywordVoid;
 type: KeywordBool;
