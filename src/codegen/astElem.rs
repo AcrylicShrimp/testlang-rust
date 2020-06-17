@@ -4,7 +4,7 @@ use inkwell::values::PointerValue;
 use super::astElemStmtScope::ASTElemStmtScope;
 use super::astType::Type;
 use super::gen::{FuncBlockGen, ModuleGen};
-use super::value::ValueType;
+use super::value::{Value, ValueType};
 use crate::lexer::Token;
 use crate::parser::AST;
 
@@ -35,7 +35,7 @@ pub trait ASTElemExp {
 		ctx: &'ctx Context,
 		mdl: &'mdl mut ModuleGen<'ctx>,
 		fnc: &'fnc mut FuncBlockGen<'ctx>,
-	);
+	) -> Value;
 }
 
 pub fn new_statement(ast: &AST) -> Box<dyn ASTElemStmt> {

@@ -85,6 +85,8 @@ impl ASTElemStmt for ASTElemStmtIf {
 			);
 		}
 
+		let criteria = self.criteria.gen_code(ctx, mdl, fnc);
+
 		unimplemented!();
 	}
 }
