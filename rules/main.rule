@@ -133,6 +133,9 @@ op-cast: @op-single;
 op-cast: @op-cast KeywordAs @type;
 
 op-single: KeywordFrom @scope-statement;
+op-single: KeywordFrom @if-statement;
+op-single: KeywordFrom @for-statement;
+op-single: KeywordFrom @with-statement;
 op-single: ParenL @expression ParenR;
 op-single: OpAdd @op-single;
 op-single: OpSub @op-single;
