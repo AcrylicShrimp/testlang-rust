@@ -39,11 +39,13 @@ with-statement: KeywordWith @with-statement-id-list @scope-statement;
 with-statement-id-list: Id OpAssign @expression;
 with-statement-id-list: @with-statement-id-list Comma Id OpAssign @expression;
 
+let-statement: KeywordLet Id;
+let-statement: KeywordLet Id OpAssign @expression;
+let-statement: KeywordLet Id @type;
+let-statement: KeywordLet Id @type OpAssign @expression;
+
 ret-statement: KeywordRet;
 ret-statement: KeywordRet @expression;
-
-let-statement: KeywordLet Id OpAssign @expression;
-let-statement: KeywordLet Id @type OpAssign @expression;
 
 break-statement: KeywordBreak;
 break-statement: KeywordBreak Id;
