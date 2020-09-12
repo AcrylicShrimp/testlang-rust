@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod untyped_ir;
 // pub mod astElem;
 // pub mod astElemStmtIf;
 // pub mod astElemStmtScope;
