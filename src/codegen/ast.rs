@@ -3,7 +3,7 @@ use super::super::parser::AST as RawAST;
 use itertools::Itertools;
 use std::collections::HashSet;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ASTScope {
 	pub index: usize,
 	pub parent_index: Option<usize>,
@@ -12,22 +12,26 @@ pub struct ASTScope {
 
 #[derive(Debug)]
 pub struct AST {
-	root_ast_node: Vec<ASTNode>,
-	ast_scope_vec: Vec<ASTScope>,
+	pub root_ast_node: Vec<ASTNode>,
+	pub ast_scope_vec: Vec<ASTScope>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ASTNode {
 	Block(ASTBlockNode),
 	If(ASTIfNode),
 	For(ASTForNode),
 	With(ASTWithNode),
+	Let(ASTLetNode),
+	Ret(ASTRetNode),
+	Break(ASTBreakNode),
+	Continue(ASTContinueNode),
 	Expression(ASTExpressionNode),
 }
 
 macro_rules! define_ast_node {
 	($name: ident { $($field: ident : $type:ty),* $(,)* }) => {
-		#[derive(Debug)]
+		#[derive(Clone, Debug)]
 		pub struct $name {
 			// TODO: Add source file and range informations here.
 			// TODO: Remove the scope informations here; they should be considered on lower level.
@@ -47,7 +51,7 @@ define_ast_node!(ASTIfNode {
 	else_ast_block: Option<ASTIfElseNode>,
 });
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ASTIfElseNode {
 	Else(ASTBlockNode),
 	ElseIf(Box<ASTIfNode>),
@@ -59,7 +63,7 @@ define_ast_node!(ASTForNode {
 	body_ast_block: ASTBlockNode,
 });
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ASTForHeadNode {
 	Infinite,
 	WithCriteria(ASTExpressionNode),
@@ -76,13 +80,31 @@ define_ast_node!(ASTWithNode {
 	ast_block: ASTBlockNode,
 });
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ASTWithTemporaryNode {
-	variable: String,
-	expression: ASTExpressionNode,
+	pub variable: String,
+	pub expression: ASTExpressionNode,
 }
 
-#[derive(Debug)]
+define_ast_node!(ASTLetNode {
+	variable: String,
+	expression: Option<ASTExpressionNode>,
+	// TODO: Add a optional type notation here.
+});
+
+define_ast_node!(ASTRetNode {
+	expression: Option<ASTExpressionNode>,
+});
+
+define_ast_node!(ASTBreakNode {
+	label: Option<String>
+});
+
+define_ast_node!(ASTContinueNode {
+	label: Option<String>
+});
+
+#[derive(Clone, Debug)]
 pub enum ASTExpressionNode {
 	Assignment(ASTAssignmentNode),
 	AdditionAssignment(ASTAdditionAssignmentNode),
@@ -289,7 +311,7 @@ define_ast_node!(ASTCastNode {
 	// TODO: Add a type notation here.
 });
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ASTFromNode {
 	Block(Box<ASTBlockNode>),
 	If(Box<ASTIfNode>),
@@ -316,7 +338,7 @@ define_ast_node!(ASTCallNode {
 
 define_ast_node!(ASTLeftValueNode { variable: String });
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ASTLiteralNode {
 	Bool(String),
 	Integer(String),
@@ -415,6 +437,26 @@ impl AST {
 				&raw_ast.children[0],
 			)),
 			"with-statement" => ASTNode::With(AST::from_raw_ast_node_with(
+				ast,
+				scope_index,
+				&raw_ast.children[0],
+			)),
+			"let-statement" => ASTNode::Let(AST::from_raw_ast_node_let(
+				ast,
+				scope_index,
+				&raw_ast.children[0],
+			)),
+			"ret-statement" => ASTNode::Ret(AST::from_raw_ast_node_ret(
+				ast,
+				scope_index,
+				&raw_ast.children[0],
+			)),
+			"break-statement" => ASTNode::Break(AST::from_raw_ast_node_break(
+				ast,
+				scope_index,
+				&raw_ast.children[0],
+			)),
+			"continue-statement" => ASTNode::Continue(AST::from_raw_ast_node_continue(
 				ast,
 				scope_index,
 				&raw_ast.children[0],
@@ -582,6 +624,7 @@ impl AST {
 			},
 		}
 	}
+
 	fn from_raw_ast_node_with(ast: &mut AST, scope_index: usize, raw_ast: &RawAST) -> ASTWithNode {
 		let inner_scope_index = ast.new_scope(scope_index);
 
@@ -625,6 +668,92 @@ impl AST {
 					.collect::<Vec<ASTWithTemporaryNode>>()
 			},
 			ast_block: AST::from_raw_ast_node_block(ast, inner_scope_index, &raw_ast.children[2]),
+		}
+	}
+
+	fn from_raw_ast_node_let(ast: &mut AST, scope_index: usize, raw_ast: &RawAST) -> ASTLetNode {
+		ASTLetNode {
+			scope_index,
+			variable: raw_ast.children[1]
+				.child
+				.as_ref()
+				.unwrap()
+				.token_content
+				.clone(),
+			expression: match raw_ast.children.len() {
+				2 => None,
+				4 => Some(AST::from_raw_ast_node_expression(
+					ast,
+					scope_index,
+					&raw_ast.children[3],
+				)),
+				3 => None,
+				5 => Some(AST::from_raw_ast_node_expression(
+					ast,
+					scope_index,
+					&raw_ast.children[4],
+				)),
+				_ => unreachable!(),
+			},
+		}
+	}
+
+	fn from_raw_ast_node_ret(ast: &mut AST, scope_index: usize, raw_ast: &RawAST) -> ASTRetNode {
+		ASTRetNode {
+			scope_index,
+			expression: match raw_ast.children.len() {
+				1 => None,
+				2 => Some(AST::from_raw_ast_node_expression(
+					ast,
+					scope_index,
+					&raw_ast.children[1],
+				)),
+				_ => unreachable!(),
+			},
+		}
+	}
+
+	fn from_raw_ast_node_break(
+		_ast: &mut AST,
+		scope_index: usize,
+		raw_ast: &RawAST,
+	) -> ASTBreakNode {
+		ASTBreakNode {
+			scope_index,
+			label: match raw_ast.children.len() {
+				1 => None,
+				2 => Some(
+					raw_ast.children[1]
+						.child
+						.as_ref()
+						.unwrap()
+						.token_content
+						.clone(),
+				),
+				_ => unreachable!(),
+			},
+		}
+	}
+
+	fn from_raw_ast_node_continue(
+		_ast: &mut AST,
+		scope_index: usize,
+		raw_ast: &RawAST,
+	) -> ASTContinueNode {
+		ASTContinueNode {
+			scope_index,
+			label: match raw_ast.children.len() {
+				1 => None,
+				2 => Some(
+					raw_ast.children[1]
+						.child
+						.as_ref()
+						.unwrap()
+						.token_content
+						.clone(),
+				),
+				_ => unreachable!(),
+			},
 		}
 	}
 }
