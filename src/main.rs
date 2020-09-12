@@ -9,6 +9,7 @@ extern crate serde_json;
 // use codegen::generator::Generator as CodeGenerator;
 // use codegen::value::ValueType;
 use codegen::ast::AST;
+use codegen::untyped_ir;
 use inkwell::OptimizationLevel;
 use parser::Parser;
 use rule::generator::action_table::ActionTable;
@@ -68,7 +69,7 @@ fn do_gen_ast(content: String) {
             match ast {
                 Ok(ast) => {
                     // println!("{:#?}", &ast);
-                    println!("{:#?}", AST::from_raw_ast(&ast));
+                    println!("{:#?}", untyped_ir::from_ast(&AST::from_raw_ast(&ast)));
                 }
                 Err(err) => println!("{}", err),
             };
