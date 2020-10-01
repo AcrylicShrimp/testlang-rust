@@ -94,7 +94,15 @@ impl Parser {
 		}
 
 		let mut lexer = Lexer::new(content);
-		let mut token = lexer.next();
+		let mut next_token = || loop {
+			let token = lexer.next();
+
+			if token.token_type != TokenType::Comment {
+				return token;
+			}
+		};
+
+		let mut token = next_token();
 		let mut token_type = if token.token_type == TokenType::Eof {
 			"".to_string()
 		} else {
@@ -121,6 +129,7 @@ impl Parser {
 							.unwrap()
 							.literal
 							.keys()
+							.filter(|&token| !token.is_empty())
 							.collect::<Vec<&String>>()
 					));
 				}
@@ -134,7 +143,7 @@ impl Parser {
 					stack.push(StackItem::AST(ast));
 					stack.push(StackItem::State(action.next_state));
 
-					token = lexer.next();
+					token = next_token();
 					token_type = if token.token_type == TokenType::Eof {
 						"".to_string()
 					} else {

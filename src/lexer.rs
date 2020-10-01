@@ -94,6 +94,7 @@ pub enum TokenType {
 	KeywordF32,      // f32
 	KeywordF64,      // f64
 	KeywordStr,      // str
+	Comment,         // // ...
 }
 
 #[derive(Debug, Clone)]
@@ -449,6 +450,16 @@ impl Lexer {
 				'=' => {
 					self.next_character(AdvanceMode::Pre);
 					return return_token(TokenType::OpAssignDiv, "/=".to_string());
+				}
+				'/' => {
+					self.next_character(AdvanceMode::Pre);
+					let mut string = "//".to_owned();
+
+					while !self.is_eof() && !self.is_newline() {
+						string.push(self.next_character(AdvanceMode::Post));
+					}
+
+					return return_token(TokenType::Comment, string);
 				}
 				_ => {
 					return return_token(TokenType::OpDiv, "/".to_string());
