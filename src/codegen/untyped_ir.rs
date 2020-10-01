@@ -13,6 +13,49 @@ pub enum IR {
 }
 
 #[derive(Clone, Debug)]
+pub enum IRType {
+	Void,
+	Bool,
+	I8,
+	I16,
+	I32,
+	I64,
+	I128,
+	U8,
+	U16,
+	U32,
+	U64,
+	U128,
+	F16,
+	F32,
+	F64,
+	String,
+}
+
+impl IRType {
+	pub fn from_ast_type(ty: ASTType) -> IRType {
+		match ty {
+			ASTType::Void => IRType::Void,
+			ASTType::Bool => IRType::Bool,
+			ASTType::I8 => IRType::I8,
+			ASTType::I16 => IRType::I16,
+			ASTType::I32 => IRType::I32,
+			ASTType::I64 => IRType::I64,
+			ASTType::I128 => IRType::I128,
+			ASTType::U8 => IRType::U8,
+			ASTType::U16 => IRType::U16,
+			ASTType::U32 => IRType::U32,
+			ASTType::U64 => IRType::U64,
+			ASTType::U128 => IRType::U128,
+			ASTType::F16 => IRType::F16,
+			ASTType::F32 => IRType::F32,
+			ASTType::F64 => IRType::F64,
+			ASTType::String => IRType::String,
+		}
+	}
+}
+
+#[derive(Clone, Debug)]
 pub struct IRBlock {
 	pub ir_vec: Vec<IR>,
 }
@@ -34,6 +77,7 @@ pub struct IRLoop {
 pub struct IRLet {
 	pub name: String,
 	pub expression: Option<IRExpression>,
+	pub ty: Option<IRType>,
 }
 
 #[derive(Clone, Debug)]
@@ -285,7 +329,7 @@ pub struct IRBitNot {
 #[derive(Clone, Debug)]
 pub struct IRCast {
 	lhs: Box<IRExpression>,
-	// TODO: Add a type notation here.
+	ty: IRType,
 }
 
 #[derive(Clone, Debug)]
@@ -317,9 +361,8 @@ pub enum IRLiteral {
 	String(String),
 }
 
-pub fn from_ast(ast: &AST) -> Vec<IR> {
-	ast.root_ast_node
-		.iter()
+pub fn from_ast(ast: &Vec<ASTNode>) -> Vec<IR> {
+	ast.iter()
 		.map(|ast_node| ir_from_ast_node(ast_node))
 		.collect()
 }
@@ -397,6 +440,7 @@ fn ir_from_ast_node_with(ast_with_node: &ASTWithNode) -> IRBlock {
 				IR::Let(IRLet {
 					name: temporary.variable.clone(),
 					expression: Some(ir_from_ast_node_expression(&temporary.expression)),
+					ty: None,
 				})
 			})
 			.chain(ir_from_ast_node_block(&ast_with_node.ast_block).ir_vec)
@@ -411,6 +455,7 @@ fn ir_from_ast_node_let(ast_let_node: &ASTLetNode) -> IRLet {
 			.expression
 			.clone()
 			.map(|expression| ir_from_ast_node_expression(&expression)),
+		ty: ast_let_node.ty.clone().map(|ty| IRType::from_ast_type(ty)),
 	}
 }
 
@@ -593,6 +638,7 @@ fn ir_from_ast_node_expression(ast_expression_node: &ASTExpressionNode) -> IRExp
 		}),
 		ASTExpressionNode::Cast(inner_node) => IRExpression::Cast(IRCast {
 			lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
+			ty: IRType::from_ast_type(inner_node.ty.clone()),
 		}),
 		ASTExpressionNode::From(..) => unimplemented!(),
 		ASTExpressionNode::Paren(inner_node) => ir_from_ast_node_expression(&inner_node.lhs),
