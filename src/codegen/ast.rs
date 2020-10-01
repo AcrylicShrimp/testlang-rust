@@ -1,20 +1,6 @@
 use super::super::lexer::TokenType;
 use super::super::parser::AST as RawAST;
 use itertools::Itertools;
-use std::collections::HashSet;
-
-#[derive(Clone, Debug)]
-pub struct ASTScope {
-	pub index: usize,
-	pub parent_index: Option<usize>,
-	pub child_index_set: HashSet<usize>,
-}
-
-#[derive(Debug)]
-pub struct AST {
-	pub root_ast_node: Vec<ASTNode>,
-	pub ast_scope_vec: Vec<ASTScope>,
-}
 
 #[derive(Clone, Debug)]
 pub enum ASTNode {
@@ -29,13 +15,31 @@ pub enum ASTNode {
 	Expression(ASTExpressionNode),
 }
 
+#[derive(Clone, Debug)]
+pub enum ASTType {
+	Void,
+	Bool,
+	I8,
+	I16,
+	I32,
+	I64,
+	I128,
+	U8,
+	U16,
+	U32,
+	U64,
+	U128,
+	F16,
+	F32,
+	F64,
+	String,
+}
+
 macro_rules! define_ast_node {
 	($name: ident { $($field: ident : $type:ty),* $(,)* }) => {
 		#[derive(Clone, Debug)]
 		pub struct $name {
 			// TODO: Add source file and range informations here.
-			// TODO: Remove the scope informations here; they should be considered on lower level.
-			pub scope_index: usize,
 			$(pub $field: $type,)*
 		}
 	};
@@ -89,7 +93,7 @@ pub struct ASTWithTemporaryNode {
 define_ast_node!(ASTLetNode {
 	variable: String,
 	expression: Option<ASTExpressionNode>,
-	// TODO: Add a optional type notation here.
+	ty: Option<ASTType>,
 });
 
 define_ast_node!(ASTRetNode {
@@ -308,7 +312,7 @@ define_ast_node!(ASTBitNotNode {
 
 define_ast_node!(ASTCastNode {
 	lhs: Box<ASTExpressionNode>,
-	// TODO: Add a type notation here.
+	ty: ASTType,
 });
 
 #[derive(Clone, Debug)]
@@ -346,383 +350,113 @@ pub enum ASTLiteralNode {
 	String(String),
 }
 
-impl ASTScope {
-	pub fn new(index: usize) -> ASTScope {
-		ASTScope {
-			index,
-			parent_index: None,
-			child_index_set: HashSet::new(),
-		}
-	}
-
-	pub fn from_parent(index: usize, parent_ast_scope: &mut ASTScope) -> ASTScope {
-		parent_ast_scope.child_index_set.insert(index);
-
-		ASTScope {
-			index,
-			parent_index: Some(parent_ast_scope.index),
-			child_index_set: HashSet::new(),
-		}
-	}
+pub fn from_raw_ast(raw_ast: &RawAST) -> Vec<ASTNode> {
+	from_raw_ast_module(raw_ast)
 }
 
-impl AST {
-	pub fn from_raw_ast(raw_ast: &RawAST) -> AST {
-		let mut ast = AST {
-			root_ast_node: Vec::new(),
-			ast_scope_vec: vec![ASTScope::new(0)],
-		};
+fn from_raw_ast_module(raw_ast: &RawAST) -> Vec<ASTNode> {
+	let mut raw_ast_node_stack = raw_ast.children[0]
+		.children
+		.iter()
+		.rev()
+		.collect::<Vec<&RawAST>>();
 
-		ast.root_ast_node = AST::from_raw_ast_module(&mut ast, 0, raw_ast);
-
-		ast
-	}
-
-	fn new_scope(&mut self, parent_scope_index: usize) -> usize {
-		let ast_scope_index = self.ast_scope_vec.len();
-		let ast_scope = ASTScope::from_parent(
-			self.ast_scope_vec.len(),
-			&mut self.ast_scope_vec[parent_scope_index],
-		);
-
-		self.ast_scope_vec.push(ast_scope);
-
-		ast_scope_index
-	}
-
-	fn from_raw_ast_module(ast: &mut AST, scope_index: usize, raw_ast: &RawAST) -> Vec<ASTNode> {
-		let mut raw_ast_node_stack = raw_ast.children[0]
+	while match raw_ast_node_stack.last() {
+		Some(last_raw_ast) => last_raw_ast.name == "statement-list",
+		None => false,
+	} {
+		let raw_ast_node_stack_tail = &mut raw_ast_node_stack
+			.pop()
+			.unwrap()
 			.children
 			.iter()
 			.rev()
 			.collect::<Vec<&RawAST>>();
 
-		while match raw_ast_node_stack.last() {
-			Some(last_raw_ast) => last_raw_ast.name == "statement-list",
-			None => false,
-		} {
-			let raw_ast_node_stack_tail = &mut raw_ast_node_stack
-				.pop()
-				.unwrap()
+		raw_ast_node_stack.append(raw_ast_node_stack_tail);
+	}
+
+	raw_ast_node_stack
+		.into_iter()
+		.rev()
+		.map(|raw_ast| from_raw_ast_node(raw_ast))
+		.collect::<Vec<ASTNode>>()
+}
+
+fn from_raw_ast_node(raw_ast: &RawAST) -> ASTNode {
+	match raw_ast.children[0].name.as_ref() {
+		"scope-statement" => ASTNode::Block(from_raw_ast_node_block(&raw_ast.children[0])),
+		"if-statement" => ASTNode::If(from_raw_ast_node_if(&raw_ast.children[0])),
+		"for-statement" => ASTNode::For(from_raw_ast_node_for(&raw_ast.children[0])),
+		"with-statement" => ASTNode::With(from_raw_ast_node_with(&raw_ast.children[0])),
+		"let-statement" => ASTNode::Let(from_raw_ast_node_let(&raw_ast.children[0])),
+		"ret-statement" => ASTNode::Ret(from_raw_ast_node_ret(&raw_ast.children[0])),
+		"break-statement" => ASTNode::Break(from_raw_ast_node_break(&raw_ast.children[0])),
+		"continue-statement" => ASTNode::Continue(from_raw_ast_node_continue(&raw_ast.children[0])),
+		"expression" => ASTNode::Expression(from_raw_ast_node_expression(&raw_ast.children[0])),
+		_ => unreachable!(),
+	}
+}
+
+fn from_raw_ast_node_block(raw_ast: &RawAST) -> ASTBlockNode {
+	ASTBlockNode {
+		ast_node_vec: {
+			let mut raw_ast_node_stack = raw_ast.children[1]
 				.children
 				.iter()
 				.rev()
 				.collect::<Vec<&RawAST>>();
 
-			raw_ast_node_stack.append(raw_ast_node_stack_tail);
-		}
+			while match raw_ast_node_stack.last() {
+				Some(last_raw_ast) => last_raw_ast.name == "statement-list",
+				None => false,
+			} {
+				let raw_ast_node_stack_tail = &mut raw_ast_node_stack
+					.pop()
+					.unwrap()
+					.children
+					.iter()
+					.rev()
+					.collect::<Vec<&RawAST>>();
 
-		raw_ast_node_stack
-			.into_iter()
-			.rev()
-			.map(|raw_ast| AST::from_raw_ast_node(ast, scope_index, raw_ast))
-			.collect::<Vec<ASTNode>>()
+				raw_ast_node_stack.append(raw_ast_node_stack_tail);
+			}
+
+			raw_ast_node_stack
+				.into_iter()
+				.rev()
+				.map(|raw_ast| from_raw_ast_node(raw_ast))
+				.collect::<Vec<ASTNode>>()
+		},
 	}
+}
 
-	fn from_raw_ast_node(ast: &mut AST, scope_index: usize, raw_ast: &RawAST) -> ASTNode {
-		match raw_ast.children[0].name.as_ref() {
-			"scope-statement" => ASTNode::Block(AST::from_raw_ast_node_block(
-				ast,
-				scope_index,
-				&raw_ast.children[0],
-			)),
-			"if-statement" => ASTNode::If(AST::from_raw_ast_node_if(
-				ast,
-				scope_index,
-				&raw_ast.children[0],
-			)),
-			"for-statement" => ASTNode::For(AST::from_raw_ast_node_for(
-				ast,
-				scope_index,
-				&raw_ast.children[0],
-			)),
-			"with-statement" => ASTNode::With(AST::from_raw_ast_node_with(
-				ast,
-				scope_index,
-				&raw_ast.children[0],
-			)),
-			"let-statement" => ASTNode::Let(AST::from_raw_ast_node_let(
-				ast,
-				scope_index,
-				&raw_ast.children[0],
-			)),
-			"ret-statement" => ASTNode::Ret(AST::from_raw_ast_node_ret(
-				ast,
-				scope_index,
-				&raw_ast.children[0],
-			)),
-			"break-statement" => ASTNode::Break(AST::from_raw_ast_node_break(
-				ast,
-				scope_index,
-				&raw_ast.children[0],
-			)),
-			"continue-statement" => ASTNode::Continue(AST::from_raw_ast_node_continue(
-				ast,
-				scope_index,
-				&raw_ast.children[0],
-			)),
-			"expression" => ASTNode::Expression(AST::from_raw_ast_node_expression(
-				ast,
-				scope_index,
-				&raw_ast.children[0],
-			)),
+fn from_raw_ast_node_if(raw_ast: &RawAST) -> ASTIfNode {
+	ASTIfNode {
+		criteria: from_raw_ast_node_expression(&raw_ast.children[1]),
+		if_ast_block: from_raw_ast_node_block(&raw_ast.children[2]),
+		else_ast_block: match raw_ast.children.len() {
+			3 => None,
+			5 => Some(match raw_ast.children[4].name.as_ref() {
+				"scope-statement" => {
+					ASTIfElseNode::Else(from_raw_ast_node_block(&raw_ast.children[4]))
+				}
+				"if-statement" => {
+					ASTIfElseNode::ElseIf(Box::new(from_raw_ast_node_if(&raw_ast.children[4])))
+				}
+				_ => unreachable!(),
+			}),
 			_ => unreachable!(),
-		}
+		},
 	}
+}
 
-	fn from_raw_ast_node_block(
-		ast: &mut AST,
-		scope_index: usize,
-		raw_ast: &RawAST,
-	) -> ASTBlockNode {
-		ASTBlockNode {
-			scope_index,
-			ast_node_vec: {
-				let mut raw_ast_node_stack = raw_ast.children[1]
-					.children
-					.iter()
-					.rev()
-					.collect::<Vec<&RawAST>>();
-
-				while match raw_ast_node_stack.last() {
-					Some(last_raw_ast) => last_raw_ast.name == "statement-list",
-					None => false,
-				} {
-					let raw_ast_node_stack_tail = &mut raw_ast_node_stack
-						.pop()
-						.unwrap()
-						.children
-						.iter()
-						.rev()
-						.collect::<Vec<&RawAST>>();
-
-					raw_ast_node_stack.append(raw_ast_node_stack_tail);
-				}
-
-				let inner_scope_index = ast.new_scope(scope_index);
-
-				raw_ast_node_stack
-					.into_iter()
-					.rev()
-					.map(|raw_ast| AST::from_raw_ast_node(ast, inner_scope_index, raw_ast))
-					.collect::<Vec<ASTNode>>()
-			},
-		}
-	}
-
-	fn from_raw_ast_node_if(ast: &mut AST, scope_index: usize, raw_ast: &RawAST) -> ASTIfNode {
-		ASTIfNode {
-			scope_index,
-			criteria: AST::from_raw_ast_node_expression(ast, scope_index, &raw_ast.children[1]),
-			if_ast_block: AST::from_raw_ast_node_block(ast, scope_index, &raw_ast.children[2]),
-			else_ast_block: match raw_ast.children.len() {
-				3 => None,
-				5 => {
-					Some(match raw_ast.children[4].name.as_ref() {
-						"scope-statement" => ASTIfElseNode::Else(AST::from_raw_ast_node_block(
-							ast,
-							scope_index,
-							&raw_ast.children[4],
-						)),
-						"if-statement" => ASTIfElseNode::ElseIf(Box::new(
-							AST::from_raw_ast_node_if(ast, scope_index, &raw_ast.children[4]),
-						)),
-						_ => unreachable!(),
-					})
-				}
-				_ => unreachable!(),
-			},
-		}
-	}
-
-	fn from_raw_ast_node_for(ast: &mut AST, scope_index: usize, raw_ast: &RawAST) -> ASTForNode {
-		let (offset, label) =
-			if raw_ast.children[0].child.as_ref().unwrap().token_type == TokenType::KeywordAs {
-				(
-					2,
-					Some(
-						raw_ast.children[1]
-							.child
-							.as_ref()
-							.unwrap()
-							.token_content
-							.clone(),
-					),
-				)
-			} else {
-				(0, None)
-			};
-
-		let inner_scope_index = ast.new_scope(scope_index);
-
-		ASTForNode {
-			scope_index,
-			label,
-			head: match raw_ast.children.len() - offset {
-				2 => ASTForHeadNode::Infinite,
-				3 => ASTForHeadNode::WithCriteria(AST::from_raw_ast_node_expression(
-					ast,
-					inner_scope_index,
-					&raw_ast.children[offset + 1],
-				)),
-				5 => ASTForHeadNode::WithIterator(ASTForHeadIteratorNode {
-					scope_index: inner_scope_index,
-					id_vec: {
-						let mut raw_ast_node_stack = raw_ast.children[offset + 1]
-							.children
-							.iter()
-							.rev()
-							.collect::<Vec<&RawAST>>();
-
-						while match raw_ast_node_stack.last() {
-							Some(last_raw_ast) => last_raw_ast.name == "for-statement-id-list",
-							None => false,
-						} {
-							let raw_ast_node_stack_tail = &mut raw_ast_node_stack
-								.pop()
-								.unwrap()
-								.children
-								.iter()
-								.rev()
-								.collect::<Vec<&RawAST>>();
-
-							raw_ast_node_stack.append(raw_ast_node_stack_tail);
-						}
-
-						raw_ast_node_stack
-							.into_iter()
-							.rev()
-							.filter(|raw_ast| raw_ast.name == "Id")
-							.map(|raw_ast| raw_ast.child.as_ref().unwrap().token_content.clone())
-							.collect::<Vec<String>>()
-					},
-					expression: AST::from_raw_ast_node_expression(
-						ast,
-						inner_scope_index,
-						&raw_ast.children[offset + 3],
-					),
-				}),
-				_ => unreachable!(),
-			},
-			body_ast_block: match raw_ast.children.len() - offset {
-				2 => AST::from_raw_ast_node_block(
-					ast,
-					inner_scope_index,
-					&raw_ast.children[offset + 1],
-				),
-				3 => AST::from_raw_ast_node_block(
-					ast,
-					inner_scope_index,
-					&raw_ast.children[offset + 2],
-				),
-				5 => AST::from_raw_ast_node_block(
-					ast,
-					inner_scope_index,
-					&raw_ast.children[offset + 4],
-				),
-				_ => unreachable!(),
-			},
-		}
-	}
-
-	fn from_raw_ast_node_with(ast: &mut AST, scope_index: usize, raw_ast: &RawAST) -> ASTWithNode {
-		let inner_scope_index = ast.new_scope(scope_index);
-
-		ASTWithNode {
-			scope_index,
-			temporary_vec: {
-				let mut raw_ast_node_stack = raw_ast.children[1]
-					.children
-					.iter()
-					.rev()
-					.collect::<Vec<&RawAST>>();
-
-				while match raw_ast_node_stack.last() {
-					Some(last_raw_ast) => last_raw_ast.name == "with-statement-id-list",
-					None => false,
-				} {
-					let raw_ast_node_stack_tail = &mut raw_ast_node_stack
-						.pop()
-						.unwrap()
-						.children
-						.iter()
-						.rev()
-						.collect::<Vec<&RawAST>>();
-
-					raw_ast_node_stack.append(raw_ast_node_stack_tail);
-				}
-
-				raw_ast_node_stack
-					.into_iter()
-					.rev()
-					.filter(|raw_ast| raw_ast.name == "expression" || raw_ast.name == "Id")
-					.tuples()
-					.map(|(raw_ast_id, raw_ast_expression)| ASTWithTemporaryNode {
-						variable: raw_ast_id.child.as_ref().unwrap().token_content.clone(),
-						expression: AST::from_raw_ast_node_expression(
-							ast,
-							inner_scope_index,
-							raw_ast_expression,
-						),
-					})
-					.collect::<Vec<ASTWithTemporaryNode>>()
-			},
-			ast_block: AST::from_raw_ast_node_block(ast, inner_scope_index, &raw_ast.children[2]),
-		}
-	}
-
-	fn from_raw_ast_node_let(ast: &mut AST, scope_index: usize, raw_ast: &RawAST) -> ASTLetNode {
-		ASTLetNode {
-			scope_index,
-			variable: raw_ast.children[1]
-				.child
-				.as_ref()
-				.unwrap()
-				.token_content
-				.clone(),
-			expression: match raw_ast.children.len() {
-				2 => None,
-				4 => Some(AST::from_raw_ast_node_expression(
-					ast,
-					scope_index,
-					&raw_ast.children[3],
-				)),
-				3 => None,
-				5 => Some(AST::from_raw_ast_node_expression(
-					ast,
-					scope_index,
-					&raw_ast.children[4],
-				)),
-				_ => unreachable!(),
-			},
-		}
-	}
-
-	fn from_raw_ast_node_ret(ast: &mut AST, scope_index: usize, raw_ast: &RawAST) -> ASTRetNode {
-		ASTRetNode {
-			scope_index,
-			expression: match raw_ast.children.len() {
-				1 => None,
-				2 => Some(AST::from_raw_ast_node_expression(
-					ast,
-					scope_index,
-					&raw_ast.children[1],
-				)),
-				_ => unreachable!(),
-			},
-		}
-	}
-
-	fn from_raw_ast_node_break(
-		_ast: &mut AST,
-		scope_index: usize,
-		raw_ast: &RawAST,
-	) -> ASTBreakNode {
-		ASTBreakNode {
-			scope_index,
-			label: match raw_ast.children.len() {
-				1 => None,
-				2 => Some(
+fn from_raw_ast_node_for(raw_ast: &RawAST) -> ASTForNode {
+	let (offset, label) =
+		if raw_ast.children[0].child.as_ref().unwrap().token_type == TokenType::KeywordAs {
+			(
+				2,
+				Some(
 					raw_ast.children[1]
 						.child
 						.as_ref()
@@ -730,299 +464,28 @@ impl AST {
 						.token_content
 						.clone(),
 				),
-				_ => unreachable!(),
-			},
-		}
-	}
+			)
+		} else {
+			(0, None)
+		};
 
-	fn from_raw_ast_node_continue(
-		_ast: &mut AST,
-		scope_index: usize,
-		raw_ast: &RawAST,
-	) -> ASTContinueNode {
-		ASTContinueNode {
-			scope_index,
-			label: match raw_ast.children.len() {
-				1 => None,
-				2 => Some(
-					raw_ast.children[1]
-						.child
-						.as_ref()
-						.unwrap()
-						.token_content
-						.clone(),
-				),
-				_ => unreachable!(),
-			},
-		}
-	}
-}
-
-macro_rules! from_raw_ast_node_assignment {
-	($name: ident -> $type: ident($ast: ident, $scope_index: ident, $raw_ast: ident)) => {
-		ASTExpressionNode::$name($type {
-			$scope_index,
-			lhs: AST::from_raw_ast_node_left_value($ast, $scope_index, &$raw_ast.children[0]),
-			rhs: Box::new(AST::from_raw_ast_node_expression(
-				$ast,
-				$scope_index,
-				&$raw_ast.children[2],
+	ASTForNode {
+		label,
+		head: match raw_ast.children.len() - offset {
+			2 => ASTForHeadNode::Infinite,
+			3 => ASTForHeadNode::WithCriteria(from_raw_ast_node_expression(
+				&raw_ast.children[offset + 1],
 			)),
-			})
-	};
-}
-
-macro_rules! from_raw_ast_node_unary {
-	($name: ident -> $type: ident($ast: ident, $scope_index: ident, $raw_ast: ident)) => {
-		ASTExpressionNode::$name($type {
-			$scope_index,
-			lhs: Box::new(AST::from_raw_ast_node_expression(
-				$ast,
-				$scope_index,
-				&$raw_ast.children[1],
-			)),
-			})
-	};
-}
-
-macro_rules! from_raw_ast_node_binary {
-	($name: ident -> $type: ident($ast: ident, $scope_index: ident, $raw_ast: ident)) => {
-		ASTExpressionNode::$name($type {
-			$scope_index,
-			lhs: Box::new(AST::from_raw_ast_node_expression(
-				$ast,
-				$scope_index,
-				&$raw_ast.children[0],
-			)),
-			rhs: Box::new(AST::from_raw_ast_node_expression(
-				$ast,
-				$scope_index,
-				&$raw_ast.children[2],
-			)),
-			})
-	};
-}
-
-impl AST {
-	fn from_raw_ast_node_expression(
-		ast: &mut AST,
-		scope_index: usize,
-		raw_ast: &RawAST,
-	) -> ASTExpressionNode {
-		if raw_ast.children.len() == 1 && !raw_ast.children[0].is_terminal {
-			return AST::from_raw_ast_node_expression(ast, scope_index, &raw_ast.children[0]);
-		}
-
-		match raw_ast.name.as_ref() {
-			"assignment" => match raw_ast.children[1].child.as_ref().unwrap().token_type {
-				TokenType::OpAssign => {
-					from_raw_ast_node_assignment!(Assignment -> ASTAssignmentNode(ast, scope_index, raw_ast))
-				}
-				TokenType::OpAssignAdd => {
-					from_raw_ast_node_assignment!(AdditionAssignment -> ASTAdditionAssignmentNode(ast, scope_index, raw_ast))
-				}
-				TokenType::OpAssignSub => {
-					from_raw_ast_node_assignment!(SubtractionAssignment -> ASTSubtractionAssignmentNode(ast, scope_index, raw_ast))
-				}
-				TokenType::OpAssignMul => {
-					from_raw_ast_node_assignment!(MultiplicationAssignment -> ASTMultiplicationAssignmentNode(ast, scope_index, raw_ast))
-				}
-				TokenType::OpAssignDiv => {
-					from_raw_ast_node_assignment!(DivisionAssignment -> ASTDivisionAssignmentNode(ast, scope_index, raw_ast))
-				}
-				TokenType::OpAssignMod => {
-					from_raw_ast_node_assignment!(ModuloAssignment -> ASTModuloAssignmentNode(ast, scope_index, raw_ast))
-				}
-				TokenType::OpAssignShiftL => {
-					from_raw_ast_node_assignment!(ShiftLeftAssignment -> ASTShiftLeftAssignmentNode(ast, scope_index, raw_ast))
-				}
-				TokenType::OpAssignShiftR => {
-					from_raw_ast_node_assignment!(ShiftRightAssignment -> ASTShiftRightAssignmentNode(ast, scope_index, raw_ast))
-				}
-				TokenType::OpAssignBitOr => {
-					from_raw_ast_node_assignment!(BitOrAssignment -> ASTBitOrAssignmentNode(ast, scope_index, raw_ast))
-				}
-				TokenType::OpAssignBitAnd => {
-					from_raw_ast_node_assignment!(BitAndAssignment -> ASTBitAndAssignmentNode(ast, scope_index, raw_ast))
-				}
-				TokenType::OpAssignBitXor => {
-					from_raw_ast_node_assignment!(BitXorAssignment -> ASTBitXorAssignmentNode(ast, scope_index, raw_ast))
-				}
-				TokenType::OpAssignBitNot => {
-					from_raw_ast_node_assignment!(BitNotAssignment -> ASTBitNotAssignmentNode(ast, scope_index, raw_ast))
-				}
-				_ => unreachable!(),
-			},
-			"op-or" => {
-				from_raw_ast_node_binary!(LogicalOr -> ASTLogicalOrNode(ast, scope_index, raw_ast))
-			}
-			"op-and" => {
-				from_raw_ast_node_binary!(LogicalAnd -> ASTLogicalAndNode(ast, scope_index, raw_ast))
-			}
-			"op-cmp" => match raw_ast.children[1].child.as_ref().unwrap().token_type {
-				TokenType::OpEq => {
-					from_raw_ast_node_binary!(TestEqual -> ASTTestEqualNode(ast, scope_index, raw_ast))
-				}
-				TokenType::OpNeq => {
-					from_raw_ast_node_binary!(TestNotEqual -> ASTTestNotEqualNode(ast, scope_index, raw_ast))
-				}
-				TokenType::OpLs => {
-					from_raw_ast_node_binary!(TestLess -> ASTTestLessNode(ast, scope_index, raw_ast))
-				}
-				TokenType::OpLsEq => {
-					from_raw_ast_node_binary!(TestLessEqual -> ASTTestLessEqualNode(ast, scope_index, raw_ast))
-				}
-				TokenType::OpGt => {
-					from_raw_ast_node_binary!(TestGreater -> ASTTestGreaterNode(ast, scope_index, raw_ast))
-				}
-				TokenType::OpGtEq => {
-					from_raw_ast_node_binary!(TestGreaterEqual -> ASTTestGreaterEqualNode(ast, scope_index, raw_ast))
-				}
-				_ => unreachable!(),
-			},
-			"op-addsub" => match raw_ast.children[1].child.as_ref().unwrap().token_type {
-				TokenType::OpAdd => {
-					from_raw_ast_node_binary!(Addition -> ASTAdditionNode(ast, scope_index, raw_ast))
-				}
-				TokenType::OpSub => {
-					from_raw_ast_node_binary!(Subtraction -> ASTSubtractionNode(ast, scope_index, raw_ast))
-				}
-				_ => unreachable!(),
-			},
-			"op-muldivmod" => match raw_ast.children[1].child.as_ref().unwrap().token_type {
-				TokenType::OpMul => {
-					from_raw_ast_node_binary!(Multiplication -> ASTMultiplicationNode(ast, scope_index, raw_ast))
-				}
-				TokenType::OpDiv => {
-					from_raw_ast_node_binary!(Division -> ASTDivisionNode(ast, scope_index, raw_ast))
-				}
-				TokenType::OpMod => {
-					from_raw_ast_node_binary!(Modulo -> ASTModuloNode(ast, scope_index, raw_ast))
-				}
-				_ => unreachable!(),
-			},
-			"op-shift" => match raw_ast.children[1].child.as_ref().unwrap().token_type {
-				TokenType::OpShiftL => {
-					from_raw_ast_node_binary!(ShiftLeft -> ASTShiftLeftNode(ast, scope_index, raw_ast))
-				}
-				TokenType::OpShiftR => {
-					from_raw_ast_node_binary!(ShiftRight -> ASTShiftRightNode(ast, scope_index, raw_ast))
-				}
-				_ => unreachable!(),
-			},
-			"op-bit-or" => {
-				from_raw_ast_node_binary!(BitOr -> ASTBitOrNode(ast, scope_index, raw_ast))
-			}
-			"op-bit-and" => {
-				from_raw_ast_node_binary!(BitAnd -> ASTBitAndNode(ast, scope_index, raw_ast))
-			}
-			"op-bit-xor" => {
-				from_raw_ast_node_binary!(BitXor -> ASTBitXorNode(ast, scope_index, raw_ast))
-			}
-			"op-cast" => {
-				ASTExpressionNode::Cast(AST::from_raw_ast_node_cast(ast, scope_index, raw_ast))
-			}
-			"op-single" => {
-				if raw_ast.children.len() == 1 {
-					AST::from_raw_ast_node_expression(ast, scope_index, &raw_ast.children[0])
-				} else {
-					match raw_ast.children[0].child.as_ref().unwrap().token_type {
-						TokenType::KeywordFrom => ASTExpressionNode::From(
-							AST::from_raw_ast_node_from(ast, scope_index, raw_ast),
-						),
-						TokenType::ParenL => {
-							from_raw_ast_node_unary!(Paren -> ASTParenNode(ast, scope_index, raw_ast))
-						}
-						TokenType::OpAdd => {
-							from_raw_ast_node_unary!(UnaryPositive -> ASTUnaryPositiveNode(ast, scope_index, raw_ast))
-						}
-						TokenType::OpSub => {
-							from_raw_ast_node_unary!(UnaryNegative -> ASTUnaryNegativeNode(ast, scope_index, raw_ast))
-						}
-						TokenType::OpNot => {
-							from_raw_ast_node_unary!(LogicalNot -> ASTLogicalNotNode(ast, scope_index, raw_ast))
-						}
-						TokenType::OpBitNot => {
-							from_raw_ast_node_unary!(BitNot -> ASTBitNotNode(ast, scope_index, raw_ast))
-						}
-						_ => unreachable!(),
-					}
-				}
-			}
-			"function-call" => {
-				ASTExpressionNode::Call(AST::from_raw_ast_node_call(ast, scope_index, raw_ast))
-			}
-			"left-value" => ASTExpressionNode::LeftValue(AST::from_raw_ast_node_left_value(
-				ast,
-				scope_index,
-				raw_ast,
-			)),
-			"literal" => ASTExpressionNode::Literal(AST::from_raw_ast_node_literal(
-				ast,
-				scope_index,
-				raw_ast,
-			)),
-			_ => unreachable!(),
-		}
-	}
-
-	fn from_raw_ast_node_cast(ast: &mut AST, scope_index: usize, raw_ast: &RawAST) -> ASTCastNode {
-		ASTCastNode {
-			scope_index,
-			lhs: Box::new(AST::from_raw_ast_node_expression(
-				ast,
-				scope_index,
-				&raw_ast.children[0],
-			)),
-		}
-	}
-
-	fn from_raw_ast_node_from(ast: &mut AST, scope_index: usize, raw_ast: &RawAST) -> ASTFromNode {
-		match raw_ast.children[1].name.as_ref() {
-			"scope-statement" => ASTFromNode::Block(Box::new(AST::from_raw_ast_node_block(
-				ast,
-				scope_index,
-				&raw_ast.children[1],
-			))),
-			"if-statement" => ASTFromNode::If(Box::new(AST::from_raw_ast_node_if(
-				ast,
-				scope_index,
-				&raw_ast.children[1],
-			))),
-			"for-statement" => ASTFromNode::For(Box::new(AST::from_raw_ast_node_for(
-				ast,
-				scope_index,
-				&raw_ast.children[1],
-			))),
-			"with-statement" => ASTFromNode::With(Box::new(AST::from_raw_ast_node_with(
-				ast,
-				scope_index,
-				&raw_ast.children[1],
-			))),
-			_ => unreachable!(),
-		}
-	}
-
-	fn from_raw_ast_node_call(ast: &mut AST, scope_index: usize, raw_ast: &RawAST) -> ASTCallNode {
-		ASTCallNode {
-			scope_index,
-			function: raw_ast.children[0]
-				.child
-				.as_ref()
-				.unwrap()
-				.token_content
-				.clone(),
-			argument_vec: match raw_ast.children.len() {
-				3 => vec![],
-				4 => {
-					let mut raw_ast_node_stack = raw_ast.children[2]
+			5 => ASTForHeadNode::WithIterator(ASTForHeadIteratorNode {
+				id_vec: {
+					let mut raw_ast_node_stack = raw_ast.children[offset + 1]
 						.children
 						.iter()
 						.rev()
 						.collect::<Vec<&RawAST>>();
 
 					while match raw_ast_node_stack.last() {
-						Some(last_raw_ast) => last_raw_ast.name == "function-call-argument-list",
+						Some(last_raw_ast) => last_raw_ast.name == "for-statement-id-list",
 						None => false,
 					} {
 						let raw_ast_node_stack_tail = &mut raw_ast_node_stack
@@ -1039,44 +502,402 @@ impl AST {
 					raw_ast_node_stack
 						.into_iter()
 						.rev()
-						.filter(|raw_ast| raw_ast.name == "expression")
-						.map(|raw_ast| AST::from_raw_ast_node_expression(ast, scope_index, raw_ast))
-						.collect::<Vec<ASTExpressionNode>>()
-				}
-				_ => unreachable!(),
-			},
-		}
-	}
-
-	fn from_raw_ast_node_left_value(
-		_ast: &mut AST,
-		scope_index: usize,
-		raw_ast: &RawAST,
-	) -> ASTLeftValueNode {
-		ASTLeftValueNode {
-			scope_index,
-			variable: raw_ast.children[0]
-				.child
-				.as_ref()
-				.unwrap()
-				.token_content
-				.clone(),
-		}
-	}
-
-	fn from_raw_ast_node_literal(
-		_ast: &mut AST,
-		_scope_index: usize,
-		raw_ast: &RawAST,
-	) -> ASTLiteralNode {
-		let token = raw_ast.children[0].child.as_ref().unwrap();
-
-		match token.token_type {
-			TokenType::LiteralBool => ASTLiteralNode::Bool(token.token_content.clone()),
-			TokenType::LiteralInteger => ASTLiteralNode::Integer(token.token_content.clone()),
-			TokenType::LiteralDecimal => ASTLiteralNode::Decimal(token.token_content.clone()),
-			TokenType::LiteralString => ASTLiteralNode::String(token.token_content.clone()),
+						.filter(|raw_ast| raw_ast.name == "Id")
+						.map(|raw_ast| raw_ast.child.as_ref().unwrap().token_content.clone())
+						.collect::<Vec<String>>()
+				},
+				expression: from_raw_ast_node_expression(&raw_ast.children[offset + 3]),
+			}),
 			_ => unreachable!(),
+		},
+		body_ast_block: match raw_ast.children.len() - offset {
+			2 => from_raw_ast_node_block(&raw_ast.children[offset + 1]),
+			3 => from_raw_ast_node_block(&raw_ast.children[offset + 2]),
+			5 => from_raw_ast_node_block(&raw_ast.children[offset + 4]),
+			_ => unreachable!(),
+		},
+	}
+}
+
+fn from_raw_ast_node_with(raw_ast: &RawAST) -> ASTWithNode {
+	ASTWithNode {
+		temporary_vec: {
+			let mut raw_ast_node_stack = raw_ast.children[1]
+				.children
+				.iter()
+				.rev()
+				.collect::<Vec<&RawAST>>();
+
+			while match raw_ast_node_stack.last() {
+				Some(last_raw_ast) => last_raw_ast.name == "with-statement-id-list",
+				None => false,
+			} {
+				let raw_ast_node_stack_tail = &mut raw_ast_node_stack
+					.pop()
+					.unwrap()
+					.children
+					.iter()
+					.rev()
+					.collect::<Vec<&RawAST>>();
+
+				raw_ast_node_stack.append(raw_ast_node_stack_tail);
+			}
+
+			raw_ast_node_stack
+				.into_iter()
+				.rev()
+				.filter(|raw_ast| raw_ast.name == "expression" || raw_ast.name == "Id")
+				.tuples()
+				.map(|(raw_ast_id, raw_ast_expression)| ASTWithTemporaryNode {
+					variable: raw_ast_id.child.as_ref().unwrap().token_content.clone(),
+					expression: from_raw_ast_node_expression(raw_ast_expression),
+				})
+				.collect::<Vec<ASTWithTemporaryNode>>()
+		},
+		ast_block: from_raw_ast_node_block(&raw_ast.children[2]),
+	}
+}
+
+fn from_raw_ast_node_let(raw_ast: &RawAST) -> ASTLetNode {
+	ASTLetNode {
+		variable: raw_ast.children[1]
+			.child
+			.as_ref()
+			.unwrap()
+			.token_content
+			.clone(),
+		expression: match raw_ast.children.len() {
+			2 => None,
+			4 => Some(from_raw_ast_node_expression(&raw_ast.children[3])),
+			3 => None,
+			5 => Some(from_raw_ast_node_expression(&raw_ast.children[4])),
+			_ => unreachable!(),
+		},
+		ty: match raw_ast.children.len() {
+			2 => None,
+			4 => None,
+			3 | 5 => Some(
+				match raw_ast.children[2].child.as_ref().unwrap().token_type {
+					TokenType::KeywordVoid => ASTType::Void,
+					TokenType::KeywordBool => ASTType::Bool,
+					TokenType::KeywordI8 => ASTType::I8,
+					TokenType::KeywordI16 => ASTType::I16,
+					TokenType::KeywordI32 => ASTType::I32,
+					TokenType::KeywordI64 => ASTType::I64,
+					TokenType::KeywordI128 => ASTType::I128,
+					TokenType::KeywordU8 => ASTType::U8,
+					TokenType::KeywordU16 => ASTType::U16,
+					TokenType::KeywordU32 => ASTType::U32,
+					TokenType::KeywordU64 => ASTType::U64,
+					TokenType::KeywordU128 => ASTType::U128,
+					TokenType::KeywordF16 => ASTType::F16,
+					TokenType::KeywordF32 => ASTType::F32,
+					TokenType::KeywordF64 => ASTType::F64,
+					TokenType::KeywordStr => ASTType::String,
+					_ => unreachable!(),
+				},
+			),
+			_ => unreachable!(),
+		},
+	}
+}
+
+fn from_raw_ast_node_ret(raw_ast: &RawAST) -> ASTRetNode {
+	ASTRetNode {
+		expression: match raw_ast.children.len() {
+			1 => None,
+			2 => Some(from_raw_ast_node_expression(&raw_ast.children[1])),
+			_ => unreachable!(),
+		},
+	}
+}
+
+fn from_raw_ast_node_break(raw_ast: &RawAST) -> ASTBreakNode {
+	ASTBreakNode {
+		label: match raw_ast.children.len() {
+			1 => None,
+			2 => Some(
+				raw_ast.children[1]
+					.child
+					.as_ref()
+					.unwrap()
+					.token_content
+					.clone(),
+			),
+			_ => unreachable!(),
+		},
+	}
+}
+
+fn from_raw_ast_node_continue(raw_ast: &RawAST) -> ASTContinueNode {
+	ASTContinueNode {
+		label: match raw_ast.children.len() {
+			1 => None,
+			2 => Some(
+				raw_ast.children[1]
+					.child
+					.as_ref()
+					.unwrap()
+					.token_content
+					.clone(),
+			),
+			_ => unreachable!(),
+		},
+	}
+}
+
+macro_rules! from_raw_ast_node_assignment {
+	($name: ident -> $type: ident($raw_ast: ident)) => {
+		ASTExpressionNode::$name($type {
+			lhs: from_raw_ast_node_left_value(&$raw_ast.children[0]),
+			rhs: Box::new(from_raw_ast_node_expression(&$raw_ast.children[2])),
+			})
+	};
+}
+
+macro_rules! from_raw_ast_node_unary {
+	($name: ident -> $type: ident($raw_ast: ident)) => {
+		ASTExpressionNode::$name($type {
+			lhs: Box::new(from_raw_ast_node_expression(&$raw_ast.children[1])),
+			})
+	};
+}
+
+macro_rules! from_raw_ast_node_binary {
+	($name: ident -> $type: ident( $raw_ast: ident)) => {
+		ASTExpressionNode::$name($type {
+			lhs: Box::new(from_raw_ast_node_expression(&$raw_ast.children[0])),
+			rhs: Box::new(from_raw_ast_node_expression(&$raw_ast.children[2])),
+			})
+	};
+}
+
+fn from_raw_ast_node_expression(raw_ast: &RawAST) -> ASTExpressionNode {
+	if raw_ast.children.len() == 1 && !raw_ast.children[0].is_terminal {
+		return from_raw_ast_node_expression(&raw_ast.children[0]);
+	}
+
+	match raw_ast.name.as_ref() {
+		"assignment" => match raw_ast.children[1].child.as_ref().unwrap().token_type {
+			TokenType::OpAssign => {
+				from_raw_ast_node_assignment!(Assignment -> ASTAssignmentNode(  raw_ast))
+			}
+			TokenType::OpAssignAdd => {
+				from_raw_ast_node_assignment!(AdditionAssignment -> ASTAdditionAssignmentNode(  raw_ast))
+			}
+			TokenType::OpAssignSub => {
+				from_raw_ast_node_assignment!(SubtractionAssignment -> ASTSubtractionAssignmentNode(  raw_ast))
+			}
+			TokenType::OpAssignMul => {
+				from_raw_ast_node_assignment!(MultiplicationAssignment -> ASTMultiplicationAssignmentNode(  raw_ast))
+			}
+			TokenType::OpAssignDiv => {
+				from_raw_ast_node_assignment!(DivisionAssignment -> ASTDivisionAssignmentNode(  raw_ast))
+			}
+			TokenType::OpAssignMod => {
+				from_raw_ast_node_assignment!(ModuloAssignment -> ASTModuloAssignmentNode(  raw_ast))
+			}
+			TokenType::OpAssignShiftL => {
+				from_raw_ast_node_assignment!(ShiftLeftAssignment -> ASTShiftLeftAssignmentNode(  raw_ast))
+			}
+			TokenType::OpAssignShiftR => {
+				from_raw_ast_node_assignment!(ShiftRightAssignment -> ASTShiftRightAssignmentNode(  raw_ast))
+			}
+			TokenType::OpAssignBitOr => {
+				from_raw_ast_node_assignment!(BitOrAssignment -> ASTBitOrAssignmentNode(  raw_ast))
+			}
+			TokenType::OpAssignBitAnd => {
+				from_raw_ast_node_assignment!(BitAndAssignment -> ASTBitAndAssignmentNode(  raw_ast))
+			}
+			TokenType::OpAssignBitXor => {
+				from_raw_ast_node_assignment!(BitXorAssignment -> ASTBitXorAssignmentNode(  raw_ast))
+			}
+			TokenType::OpAssignBitNot => {
+				from_raw_ast_node_assignment!(BitNotAssignment -> ASTBitNotAssignmentNode(  raw_ast))
+			}
+			_ => unreachable!(),
+		},
+		"op-or" => from_raw_ast_node_binary!(LogicalOr -> ASTLogicalOrNode(  raw_ast)),
+		"op-and" => from_raw_ast_node_binary!(LogicalAnd -> ASTLogicalAndNode(  raw_ast)),
+		"op-cmp" => match raw_ast.children[1].child.as_ref().unwrap().token_type {
+			TokenType::OpEq => from_raw_ast_node_binary!(TestEqual -> ASTTestEqualNode(  raw_ast)),
+			TokenType::OpNeq => {
+				from_raw_ast_node_binary!(TestNotEqual -> ASTTestNotEqualNode(  raw_ast))
+			}
+			TokenType::OpLs => from_raw_ast_node_binary!(TestLess -> ASTTestLessNode(  raw_ast)),
+			TokenType::OpLsEq => {
+				from_raw_ast_node_binary!(TestLessEqual -> ASTTestLessEqualNode(  raw_ast))
+			}
+			TokenType::OpGt => {
+				from_raw_ast_node_binary!(TestGreater -> ASTTestGreaterNode(  raw_ast))
+			}
+			TokenType::OpGtEq => {
+				from_raw_ast_node_binary!(TestGreaterEqual -> ASTTestGreaterEqualNode(  raw_ast))
+			}
+			_ => unreachable!(),
+		},
+		"op-addsub" => match raw_ast.children[1].child.as_ref().unwrap().token_type {
+			TokenType::OpAdd => from_raw_ast_node_binary!(Addition -> ASTAdditionNode(  raw_ast)),
+			TokenType::OpSub => {
+				from_raw_ast_node_binary!(Subtraction -> ASTSubtractionNode(  raw_ast))
+			}
+			_ => unreachable!(),
+		},
+		"op-muldivmod" => match raw_ast.children[1].child.as_ref().unwrap().token_type {
+			TokenType::OpMul => {
+				from_raw_ast_node_binary!(Multiplication -> ASTMultiplicationNode(  raw_ast))
+			}
+			TokenType::OpDiv => from_raw_ast_node_binary!(Division -> ASTDivisionNode(  raw_ast)),
+			TokenType::OpMod => from_raw_ast_node_binary!(Modulo -> ASTModuloNode(  raw_ast)),
+			_ => unreachable!(),
+		},
+		"op-shift" => match raw_ast.children[1].child.as_ref().unwrap().token_type {
+			TokenType::OpShiftL => {
+				from_raw_ast_node_binary!(ShiftLeft -> ASTShiftLeftNode(  raw_ast))
+			}
+			TokenType::OpShiftR => {
+				from_raw_ast_node_binary!(ShiftRight -> ASTShiftRightNode(  raw_ast))
+			}
+			_ => unreachable!(),
+		},
+		"op-bit-or" => from_raw_ast_node_binary!(BitOr -> ASTBitOrNode(  raw_ast)),
+		"op-bit-and" => from_raw_ast_node_binary!(BitAnd -> ASTBitAndNode(  raw_ast)),
+		"op-bit-xor" => from_raw_ast_node_binary!(BitXor -> ASTBitXorNode(  raw_ast)),
+		"op-cast" => ASTExpressionNode::Cast(from_raw_ast_node_cast(raw_ast)),
+		"op-single" => {
+			if raw_ast.children.len() == 1 {
+				from_raw_ast_node_expression(&raw_ast.children[0])
+			} else {
+				match raw_ast.children[0].child.as_ref().unwrap().token_type {
+					TokenType::KeywordFrom => {
+						ASTExpressionNode::From(from_raw_ast_node_from(raw_ast))
+					}
+					TokenType::ParenL => from_raw_ast_node_unary!(Paren -> ASTParenNode(  raw_ast)),
+					TokenType::OpAdd => {
+						from_raw_ast_node_unary!(UnaryPositive -> ASTUnaryPositiveNode(  raw_ast))
+					}
+					TokenType::OpSub => {
+						from_raw_ast_node_unary!(UnaryNegative -> ASTUnaryNegativeNode(  raw_ast))
+					}
+					TokenType::OpNot => {
+						from_raw_ast_node_unary!(LogicalNot -> ASTLogicalNotNode(  raw_ast))
+					}
+					TokenType::OpBitNot => {
+						from_raw_ast_node_unary!(BitNot -> ASTBitNotNode(  raw_ast))
+					}
+					_ => unreachable!(),
+				}
+			}
 		}
+		"function-call" => ASTExpressionNode::Call(from_raw_ast_node_call(raw_ast)),
+		"left-value" => ASTExpressionNode::LeftValue(from_raw_ast_node_left_value(raw_ast)),
+		"literal" => ASTExpressionNode::Literal(from_raw_ast_node_literal(raw_ast)),
+		_ => unreachable!(),
+	}
+}
+
+fn from_raw_ast_node_cast(raw_ast: &RawAST) -> ASTCastNode {
+	ASTCastNode {
+		lhs: Box::new(from_raw_ast_node_expression(&raw_ast.children[0])),
+		ty: match raw_ast.children[2].child.as_ref().unwrap().token_type {
+			TokenType::KeywordVoid => ASTType::Void,
+			TokenType::KeywordBool => ASTType::Bool,
+			TokenType::KeywordI8 => ASTType::I8,
+			TokenType::KeywordI16 => ASTType::I16,
+			TokenType::KeywordI32 => ASTType::I32,
+			TokenType::KeywordI64 => ASTType::I64,
+			TokenType::KeywordI128 => ASTType::I128,
+			TokenType::KeywordU8 => ASTType::U8,
+			TokenType::KeywordU16 => ASTType::U16,
+			TokenType::KeywordU32 => ASTType::U32,
+			TokenType::KeywordU64 => ASTType::U64,
+			TokenType::KeywordU128 => ASTType::U128,
+			TokenType::KeywordF16 => ASTType::F16,
+			TokenType::KeywordF32 => ASTType::F32,
+			TokenType::KeywordF64 => ASTType::F64,
+			TokenType::KeywordStr => ASTType::String,
+			_ => unreachable!(),
+		},
+	}
+}
+
+fn from_raw_ast_node_from(raw_ast: &RawAST) -> ASTFromNode {
+	match raw_ast.children[1].name.as_ref() {
+		"scope-statement" => {
+			ASTFromNode::Block(Box::new(from_raw_ast_node_block(&raw_ast.children[1])))
+		}
+		"if-statement" => ASTFromNode::If(Box::new(from_raw_ast_node_if(&raw_ast.children[1]))),
+		"for-statement" => ASTFromNode::For(Box::new(from_raw_ast_node_for(&raw_ast.children[1]))),
+		"with-statement" => {
+			ASTFromNode::With(Box::new(from_raw_ast_node_with(&raw_ast.children[1])))
+		}
+		_ => unreachable!(),
+	}
+}
+
+fn from_raw_ast_node_call(raw_ast: &RawAST) -> ASTCallNode {
+	ASTCallNode {
+		function: raw_ast.children[0]
+			.child
+			.as_ref()
+			.unwrap()
+			.token_content
+			.clone(),
+		argument_vec: match raw_ast.children.len() {
+			3 => vec![],
+			4 => {
+				let mut raw_ast_node_stack = raw_ast.children[2]
+					.children
+					.iter()
+					.rev()
+					.collect::<Vec<&RawAST>>();
+
+				while match raw_ast_node_stack.last() {
+					Some(last_raw_ast) => last_raw_ast.name == "function-call-argument-list",
+					None => false,
+				} {
+					let raw_ast_node_stack_tail = &mut raw_ast_node_stack
+						.pop()
+						.unwrap()
+						.children
+						.iter()
+						.rev()
+						.collect::<Vec<&RawAST>>();
+
+					raw_ast_node_stack.append(raw_ast_node_stack_tail);
+				}
+
+				raw_ast_node_stack
+					.into_iter()
+					.rev()
+					.filter(|raw_ast| raw_ast.name == "expression")
+					.map(|raw_ast| from_raw_ast_node_expression(raw_ast))
+					.collect::<Vec<ASTExpressionNode>>()
+			}
+			_ => unreachable!(),
+		},
+	}
+}
+
+fn from_raw_ast_node_left_value(raw_ast: &RawAST) -> ASTLeftValueNode {
+	ASTLeftValueNode {
+		variable: raw_ast.children[0]
+			.child
+			.as_ref()
+			.unwrap()
+			.token_content
+			.clone(),
+	}
+}
+
+fn from_raw_ast_node_literal(raw_ast: &RawAST) -> ASTLiteralNode {
+	let token = raw_ast.children[0].child.as_ref().unwrap();
+
+	match token.token_type {
+		TokenType::LiteralBool => ASTLiteralNode::Bool(token.token_content.clone()),
+		TokenType::LiteralInteger => ASTLiteralNode::Integer(token.token_content.clone()),
+		TokenType::LiteralDecimal => ASTLiteralNode::Decimal(token.token_content.clone()),
+		TokenType::LiteralString => ASTLiteralNode::String(token.token_content.clone()),
+		_ => unreachable!(),
 	}
 }
