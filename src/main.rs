@@ -8,7 +8,8 @@ extern crate serde_json;
 
 // use codegen::generator::Generator as CodeGenerator;
 // use codegen::value::ValueType;
-use codegen::ast::AST;
+use codegen::ast::from_raw_ast;
+use codegen::typed_ir;
 use codegen::untyped_ir;
 use inkwell::OptimizationLevel;
 use parser::Parser;
@@ -68,8 +69,8 @@ fn do_gen_ast(content: String) {
 
             match ast {
                 Ok(ast) => {
-                    // println!("{:#?}", &ast);
-                    println!("{:#?}", untyped_ir::from_ast(&AST::from_raw_ast(&ast)));
+                    let result = untyped_ir::from_ast(&from_raw_ast(&ast));
+                    typed_ir::test(&result.0, &result.1);
                 }
                 Err(err) => println!("{}", err),
             };

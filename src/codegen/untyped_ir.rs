@@ -1,689 +1,923 @@
+use std::env::var;
+
 use super::ast::*;
 
 #[derive(Clone, Debug)]
 pub enum IR {
-	Block(IRBlock),
-	If(IRIf),
-	Loop(IRLoop),
-	Let(IRLet),
-	Ret(IRRet),
-	Break(IRBreak),
-	Continue(IRContinue),
-	Expression(IRExpression),
+    Block(IRBlock),
+    If(IRIf),
+    Loop(IRLoop),
+    Let(IRLet),
+    Ret(IRRet),
+    Break(IRBreak),
+    Continue(IRContinue),
+    Expression(IRExpressionID),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum IRType {
-	Void,
-	Bool,
-	I8,
-	I16,
-	I32,
-	I64,
-	I128,
-	U8,
-	U16,
-	U32,
-	U64,
-	U128,
-	F16,
-	F32,
-	F64,
-	String,
+    Void,
+    Bool,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    F16,
+    F32,
+    F64,
+    String,
 }
 
 impl IRType {
-	pub fn from_ast_type(ty: ASTType) -> IRType {
-		match ty {
-			ASTType::Void => IRType::Void,
-			ASTType::Bool => IRType::Bool,
-			ASTType::I8 => IRType::I8,
-			ASTType::I16 => IRType::I16,
-			ASTType::I32 => IRType::I32,
-			ASTType::I64 => IRType::I64,
-			ASTType::I128 => IRType::I128,
-			ASTType::U8 => IRType::U8,
-			ASTType::U16 => IRType::U16,
-			ASTType::U32 => IRType::U32,
-			ASTType::U64 => IRType::U64,
-			ASTType::U128 => IRType::U128,
-			ASTType::F16 => IRType::F16,
-			ASTType::F32 => IRType::F32,
-			ASTType::F64 => IRType::F64,
-			ASTType::String => IRType::String,
-		}
-	}
+    pub fn from_ast_type(ty: ASTType) -> IRType {
+        match ty {
+            ASTType::Void => IRType::Void,
+            ASTType::Bool => IRType::Bool,
+            ASTType::I8 => IRType::I8,
+            ASTType::I16 => IRType::I16,
+            ASTType::I32 => IRType::I32,
+            ASTType::I64 => IRType::I64,
+            ASTType::I128 => IRType::I128,
+            ASTType::U8 => IRType::U8,
+            ASTType::U16 => IRType::U16,
+            ASTType::U32 => IRType::U32,
+            ASTType::U64 => IRType::U64,
+            ASTType::U128 => IRType::U128,
+            ASTType::F16 => IRType::F16,
+            ASTType::F32 => IRType::F32,
+            ASTType::F64 => IRType::F64,
+            ASTType::String => IRType::String,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct IRBlock {
-	pub ir_vec: Vec<IR>,
+    pub ir_vec: Vec<IR>,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRIf {
-	pub criteria: IRExpression,
-	pub if_block: IRBlock,
-	pub else_block: Option<IRBlock>,
+    pub criteria: IRExpressionID,
+    pub if_block: IRBlock,
+    pub else_block: Option<IRBlock>,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRLoop {
-	pub label: Option<String>,
-	pub body_block: IRBlock,
+    pub label: Option<String>,
+    pub body_block: IRBlock,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRLet {
-	pub name: String,
-	pub expression: Option<IRExpression>,
-	pub ty: Option<IRType>,
+    pub variable: IRVariableID,
+    pub expression: Option<IRExpressionID>,
+    pub ty: Option<IRType>,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRRet {
-	pub expression: Option<IRExpression>,
+    pub expression: Option<IRExpressionID>,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRBreak {
-	pub label: Option<String>,
+    pub label: Option<String>,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRContinue {
-	pub label: Option<String>,
+    pub label: Option<String>,
 }
 
 #[derive(Clone, Debug)]
 pub enum IRExpression {
-	Assignment(IRAssignment),
-	AdditionAssignment(IRAdditionAssignment),
-	SubtractionAssignment(IRSubtractionAssignment),
-	MultiplicationAssignment(IRMultiplicationAssignment),
-	DivisionAssignment(IRDivisionAssignment),
-	ModuloAssignment(IRModuloAssignment),
-	ShiftLeftAssignment(IRShiftLeftAssignment),
-	ShiftRightAssignment(IRShiftRightAssignment),
-	BitOrAssignment(IRBitOrAssignment),
-	BitAndAssignment(IRBitAndAssignment),
-	BitXorAssignment(IRBitXorAssignment),
-	BitNotAssignment(IRBitNotAssignment),
-	LogicalOr(IRLogicalOr),
-	LogicalAnd(IRLogicalAnd),
-	LogicalNot(IRLogicalNot),
-	TestEqual(IRTestEqual),
-	TestNotEqual(IRTestNotEqual),
-	TestLess(IRTestLess),
-	TestLessEqual(IRTestLessEqual),
-	TestGreater(IRTestGreater),
-	TestGreaterEqual(IRTestGreaterEqual),
-	Addition(IRAddition),
-	Subtraction(IRSubtraction),
-	Multiplication(IRMultiplication),
-	Division(IRDivision),
-	Modulo(IRModulo),
-	ShiftLeft(IRShiftLeft),
-	ShiftRight(IRShiftRight),
-	BitOr(IRBitOr),
-	BitAnd(IRBitAnd),
-	BitXor(IRBitXor),
-	BitNot(IRBitNot),
-	Cast(IRCast),
-	UnaryNegative(IRUnaryNegative),
-	Call(IRCall),
-	LeftValue(IRLeftValue),
-	Literal(IRLiteral),
+    Assignment(IRAssignment),
+    AdditionAssignment(IRAdditionAssignment),
+    SubtractionAssignment(IRSubtractionAssignment),
+    MultiplicationAssignment(IRMultiplicationAssignment),
+    DivisionAssignment(IRDivisionAssignment),
+    ModuloAssignment(IRModuloAssignment),
+    ShiftLeftAssignment(IRShiftLeftAssignment),
+    ShiftRightAssignment(IRShiftRightAssignment),
+    BitOrAssignment(IRBitOrAssignment),
+    BitAndAssignment(IRBitAndAssignment),
+    BitXorAssignment(IRBitXorAssignment),
+    BitNotAssignment(IRBitNotAssignment),
+    LogicalOr(IRLogicalOr),
+    LogicalAnd(IRLogicalAnd),
+    LogicalNot(IRLogicalNot),
+    TestEqual(IRTestEqual),
+    TestNotEqual(IRTestNotEqual),
+    TestLess(IRTestLess),
+    TestLessEqual(IRTestLessEqual),
+    TestGreater(IRTestGreater),
+    TestGreaterEqual(IRTestGreaterEqual),
+    Addition(IRAddition),
+    Subtraction(IRSubtraction),
+    Multiplication(IRMultiplication),
+    Division(IRDivision),
+    Modulo(IRModulo),
+    ShiftLeft(IRShiftLeft),
+    ShiftRight(IRShiftRight),
+    BitOr(IRBitOr),
+    BitAnd(IRBitAnd),
+    BitXor(IRBitXor),
+    BitNot(IRBitNot),
+    Cast(IRCast),
+    UnaryNegative(IRUnaryNegative),
+    Call(IRCall),
+    LeftValue(IRLeftValue),
+    Literal(IRLiteral),
 }
 
 #[derive(Clone, Debug)]
 pub struct IRAssignment {
-	pub lhs: IRLeftValue,
-	pub rhs: Box<IRExpression>,
+    pub lhs: IRLeftValue,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRAdditionAssignment {
-	lhs: IRLeftValue,
-	rhs: Box<IRExpression>,
+    pub lhs: IRLeftValue,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRSubtractionAssignment {
-	lhs: IRLeftValue,
-	rhs: Box<IRExpression>,
+    pub lhs: IRLeftValue,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRMultiplicationAssignment {
-	lhs: IRLeftValue,
-	rhs: Box<IRExpression>,
+    pub lhs: IRLeftValue,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRDivisionAssignment {
-	lhs: IRLeftValue,
-	rhs: Box<IRExpression>,
+    pub lhs: IRLeftValue,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRModuloAssignment {
-	lhs: IRLeftValue,
-	rhs: Box<IRExpression>,
+    pub lhs: IRLeftValue,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRShiftLeftAssignment {
-	lhs: IRLeftValue,
-	rhs: Box<IRExpression>,
+    pub lhs: IRLeftValue,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRShiftRightAssignment {
-	lhs: IRLeftValue,
-	rhs: Box<IRExpression>,
+    pub lhs: IRLeftValue,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRBitOrAssignment {
-	lhs: IRLeftValue,
-	rhs: Box<IRExpression>,
+    pub lhs: IRLeftValue,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRBitAndAssignment {
-	lhs: IRLeftValue,
-	rhs: Box<IRExpression>,
+    pub lhs: IRLeftValue,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRBitXorAssignment {
-	lhs: IRLeftValue,
-	rhs: Box<IRExpression>,
+    pub lhs: IRLeftValue,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRBitNotAssignment {
-	lhs: IRLeftValue,
-	rhs: Box<IRExpression>,
+    pub lhs: IRLeftValue,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRLogicalOr {
-	lhs: Box<IRExpression>,
-	rhs: Box<IRExpression>,
+    pub lhs: IRExpressionID,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRLogicalAnd {
-	lhs: Box<IRExpression>,
-	rhs: Box<IRExpression>,
+    pub lhs: IRExpressionID,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRLogicalNot {
-	lhs: Box<IRExpression>,
+    pub lhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRTestEqual {
-	lhs: Box<IRExpression>,
-	rhs: Box<IRExpression>,
+    pub lhs: IRExpressionID,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRTestNotEqual {
-	lhs: Box<IRExpression>,
-	rhs: Box<IRExpression>,
+    pub lhs: IRExpressionID,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRTestLess {
-	lhs: Box<IRExpression>,
-	rhs: Box<IRExpression>,
+    pub lhs: IRExpressionID,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRTestLessEqual {
-	lhs: Box<IRExpression>,
-	rhs: Box<IRExpression>,
+    pub lhs: IRExpressionID,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRTestGreater {
-	lhs: Box<IRExpression>,
-	rhs: Box<IRExpression>,
+    pub lhs: IRExpressionID,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRTestGreaterEqual {
-	lhs: Box<IRExpression>,
-	rhs: Box<IRExpression>,
+    pub lhs: IRExpressionID,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRAddition {
-	lhs: Box<IRExpression>,
-	rhs: Box<IRExpression>,
+    pub lhs: IRExpressionID,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRSubtraction {
-	lhs: Box<IRExpression>,
-	rhs: Box<IRExpression>,
+    pub lhs: IRExpressionID,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRMultiplication {
-	lhs: Box<IRExpression>,
-	rhs: Box<IRExpression>,
+    pub lhs: IRExpressionID,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRDivision {
-	lhs: Box<IRExpression>,
-	rhs: Box<IRExpression>,
+    pub lhs: IRExpressionID,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRModulo {
-	lhs: Box<IRExpression>,
-	rhs: Box<IRExpression>,
+    pub lhs: IRExpressionID,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRShiftLeft {
-	lhs: Box<IRExpression>,
-	rhs: Box<IRExpression>,
+    pub lhs: IRExpressionID,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRShiftRight {
-	lhs: Box<IRExpression>,
-	rhs: Box<IRExpression>,
+    pub lhs: IRExpressionID,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRBitOr {
-	lhs: Box<IRExpression>,
-	rhs: Box<IRExpression>,
+    pub lhs: IRExpressionID,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRBitAnd {
-	lhs: Box<IRExpression>,
-	rhs: Box<IRExpression>,
+    pub lhs: IRExpressionID,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRBitXor {
-	lhs: Box<IRExpression>,
-	rhs: Box<IRExpression>,
+    pub lhs: IRExpressionID,
+    pub rhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRBitNot {
-	lhs: Box<IRExpression>,
+    pub lhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRCast {
-	lhs: Box<IRExpression>,
-	ty: IRType,
+    pub lhs: IRExpressionID,
+    pub ty: IRType,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRUnaryNegative {
-	lhs: Box<IRExpression>,
+    pub lhs: IRExpressionID,
 }
 
 #[derive(Clone, Debug)]
 pub struct IRCall {
-	function: String,
-	argument_vec: Vec<IRExpression>,
+    pub function: String,
+    pub argument_vec: Vec<IRExpressionID>,
 }
 
 #[derive(Clone, Debug)]
 pub enum IRLeftValue {
-	Identifier(IRIdentifier),
-}
-
-#[derive(Clone, Debug)]
-pub struct IRIdentifier {
-	name: String,
+    Identifier(IRVariableID),
 }
 
 #[derive(Clone, Debug)]
 pub enum IRLiteral {
-	Bool(String),
-	Integer(String),
-	Decimal(String),
-	String(String),
+    Bool(String),
+    Integer(String),
+    Decimal(String),
+    String(String),
 }
 
-pub fn from_ast(ast: &Vec<ASTNode>) -> Vec<IR> {
-	ast.iter()
-		.map(|ast_node| ir_from_ast_node(ast_node))
-		.collect()
+pub type IRExpressionID = usize;
+pub type IRScopeID = usize;
+pub type IRVariableID = usize;
+
+#[derive(Clone, Debug)]
+pub struct UntypedIRScope {
+    pub variable_vec: Vec<(String, IRVariableID)>,
+    pub parent_scope: Option<IRScopeID>,
 }
 
-fn ir_from_ast_node(ast_node: &ASTNode) -> IR {
-	match ast_node {
-		ASTNode::Block(ast_block) => IR::Block(ir_from_ast_node_block(ast_block)),
-		ASTNode::If(ast_if) => IR::If(ir_from_ast_node_if(ast_if)),
-		ASTNode::For(ast_for) => IR::Loop(ir_from_ast_node_for(ast_for)),
-		ASTNode::With(ast_with) => IR::Block(ir_from_ast_node_with(ast_with)),
-		ASTNode::Let(ast_let) => IR::Let(ir_from_ast_node_let(ast_let)),
-		ASTNode::Ret(ast_ret) => IR::Ret(ir_from_ast_node_ret(ast_ret)),
-		ASTNode::Break(ast_break) => IR::Break(ir_from_ast_node_break(ast_break)),
-		ASTNode::Continue(ast_continue) => IR::Continue(ir_from_ast_node_continue(ast_continue)),
-		ASTNode::Expression(ast_expression) => {
-			IR::Expression(ir_from_ast_node_expression(ast_expression))
-		}
-	}
+impl UntypedIRScope {
+    pub fn new() -> UntypedIRScope {
+        UntypedIRScope {
+            variable_vec: Vec::new(),
+            parent_scope: None,
+        }
+    }
+
+    pub fn from_parent(parent_scope: IRScopeID) -> UntypedIRScope {
+        UntypedIRScope {
+            variable_vec: Vec::new(),
+            parent_scope: Some(parent_scope),
+        }
+    }
+
+    pub fn lookup_variable(&self, variable: &str) -> Option<IRVariableID> {
+        self.variable_vec
+            .iter()
+            .rev()
+            .find(|(variable_name, _)| variable_name == variable)
+            .map(|(_, variable_id)| *variable_id)
+    }
+
+    pub fn new_variable(&mut self, variable: &str, variable_id: IRVariableID) {
+        self.variable_vec.push((variable.to_owned(), variable_id));
+    }
 }
 
-fn ir_from_ast_node_block(ast_block_node: &ASTBlockNode) -> IRBlock {
-	IRBlock {
-		ir_vec: ast_block_node
-			.ast_node_vec
-			.iter()
-			.map(|ast_node| ir_from_ast_node(ast_node))
-			.collect(),
-	}
+#[derive(Debug)]
+pub struct UntypedIRContext {
+    pub expression_vec: Vec<IRExpression>,
+    pub scope_vec: Vec<UntypedIRScope>,
+    pub variable_count: usize,
 }
 
-fn ir_from_ast_node_if(ast_if_node: &ASTIfNode) -> IRIf {
-	IRIf {
-		criteria: ir_from_ast_node_expression(&ast_if_node.criteria),
-		if_block: ir_from_ast_node_block(&ast_if_node.if_ast_block),
-		else_block: ast_if_node
-			.else_ast_block
-			.clone()
-			.map(|else_ast_block| match else_ast_block {
-				ASTIfElseNode::Else(block_node) => ir_from_ast_node_block(&block_node),
-				ASTIfElseNode::ElseIf(if_node) => IRBlock {
-					ir_vec: vec![IR::If(ir_from_ast_node_if(&if_node))],
-				},
-			}),
-	}
+impl UntypedIRContext {
+    pub fn new() -> UntypedIRContext {
+        UntypedIRContext {
+            expression_vec: Vec::new(),
+            scope_vec: vec![UntypedIRScope {
+                variable_vec: Vec::new(),
+                parent_scope: None,
+            }],
+            variable_count: 0,
+        }
+    }
+
+    pub fn new_expression(&mut self, expression: IRExpression) -> IRExpressionID {
+        let expression_id = self.expression_vec.len();
+        self.expression_vec.push(expression);
+        expression_id
+    }
+
+    pub fn new_scope(&mut self, parent_scope: IRScopeID) -> IRScopeID {
+        let scope_id = self.scope_vec.len();
+        self.scope_vec.push(UntypedIRScope {
+            variable_vec: Vec::new(),
+            parent_scope: Some(parent_scope),
+        });
+        scope_id
+    }
+
+    pub fn new_variable(&mut self) -> IRVariableID {
+        let variable_id = self.variable_count;
+        self.variable_count += 1;
+        variable_id
+    }
 }
 
-fn ir_from_ast_node_for(ast_for_node: &ASTForNode) -> IRLoop {
-	IRLoop {
-		label: ast_for_node.label.clone(),
-		body_block: match &ast_for_node.head {
-			ASTForHeadNode::Infinite => ir_from_ast_node_block(&ast_for_node.body_ast_block),
-			ASTForHeadNode::WithCriteria(criteria_node) => IRBlock {
-				ir_vec: vec![IR::If(IRIf {
-					criteria: ir_from_ast_node_expression(&criteria_node),
-					if_block: IRBlock {
-						ir_vec: vec![IR::Break(IRBreak { label: None })],
-					},
-					else_block: None,
-				})]
-				.into_iter()
-				.chain(ir_from_ast_node_block(&ast_for_node.body_ast_block).ir_vec)
-				.collect(),
-			},
-			ASTForHeadNode::WithIterator(..) => unimplemented!(),
-		},
-	}
+#[derive(Debug)]
+pub struct UntypedIRScopeStackContext {
+    pub scope_stack: Vec<IRScopeID>,
 }
 
-fn ir_from_ast_node_with(ast_with_node: &ASTWithNode) -> IRBlock {
-	IRBlock {
-		ir_vec: ast_with_node
-			.temporary_vec
-			.iter()
-			.map(|temporary| {
-				IR::Let(IRLet {
-					name: temporary.variable.clone(),
-					expression: Some(ir_from_ast_node_expression(&temporary.expression)),
-					ty: None,
-				})
-			})
-			.chain(ir_from_ast_node_block(&ast_with_node.ast_block).ir_vec)
-			.collect(),
-	}
+impl UntypedIRScopeStackContext {
+    pub fn new() -> UntypedIRScopeStackContext {
+        UntypedIRScopeStackContext {
+            scope_stack: vec![0],
+        }
+    }
+
+    pub fn current(&self) -> IRScopeID {
+        *self.scope_stack.last().unwrap()
+    }
+
+    pub fn new_scope(&mut self, context: &mut UntypedIRContext) -> IRScopeID {
+        let scope_id = context.new_scope(*self.scope_stack.last().unwrap());
+        self.scope_stack.push(scope_id);
+        scope_id
+    }
+
+    pub fn remove_scope(&mut self) {
+        self.scope_stack.pop();
+    }
+
+    pub fn lookup_variable(
+        &self,
+        variable: &str,
+        context: &UntypedIRContext,
+    ) -> Option<IRVariableID> {
+        let mut scope = &context.scope_vec[self.current()];
+
+        loop {
+            match scope.lookup_variable(variable) {
+                Some(variable_id) => return Some(variable_id),
+                None => match scope.parent_scope {
+                    Some(parent_scope) => {
+                        scope = &context.scope_vec[parent_scope];
+                    }
+                    None => return None,
+                },
+            }
+        }
+    }
 }
 
-fn ir_from_ast_node_let(ast_let_node: &ASTLetNode) -> IRLet {
-	IRLet {
-		name: ast_let_node.variable.clone(),
-		expression: ast_let_node
-			.expression
-			.clone()
-			.map(|expression| ir_from_ast_node_expression(&expression)),
-		ty: ast_let_node.ty.clone().map(|ty| IRType::from_ast_type(ty)),
-	}
+pub fn from_ast(ast: &Vec<ASTNode>) -> (Vec<IR>, UntypedIRContext) {
+    let mut context = UntypedIRContext::new();
+    let mut scope_stack_context = UntypedIRScopeStackContext::new();
+
+    (
+        ast.iter()
+            .map(|ast_node| ir_from_ast_node(ast_node, &mut context, &mut scope_stack_context))
+            .collect(),
+        context,
+    )
 }
 
-fn ir_from_ast_node_ret(ast_ret_node: &ASTRetNode) -> IRRet {
-	IRRet {
-		expression: ast_ret_node
-			.expression
-			.clone()
-			.map(|expression| ir_from_ast_node_expression(&expression)),
-	}
+macro_rules! make_expr {
+    ($ast_expression:expr, $context:ident, $scope_stack_context:ident) => {{
+        let expression =
+            ir_from_ast_node_expression($ast_expression, $context, $scope_stack_context);
+        $context.new_expression(expression)
+    }};
+}
+
+fn ir_from_ast_node(
+    ast_node: &ASTNode,
+    context: &mut UntypedIRContext,
+    scope_stack_context: &mut UntypedIRScopeStackContext,
+) -> IR {
+    match ast_node {
+        ASTNode::Block(ast_block) => IR::Block(ir_from_ast_node_block(
+            ast_block,
+            context,
+            scope_stack_context,
+        )),
+        ASTNode::If(ast_if) => IR::If(ir_from_ast_node_if(ast_if, context, scope_stack_context)),
+        ASTNode::For(ast_for) => {
+            IR::Loop(ir_from_ast_node_for(ast_for, context, scope_stack_context))
+        }
+        ASTNode::With(ast_with) => IR::Block(ir_from_ast_node_with(
+            ast_with,
+            context,
+            scope_stack_context,
+        )),
+        ASTNode::Let(ast_let) => {
+            IR::Let(ir_from_ast_node_let(ast_let, context, scope_stack_context))
+        }
+        ASTNode::Ret(ast_ret) => {
+            IR::Ret(ir_from_ast_node_ret(ast_ret, context, scope_stack_context))
+        }
+        ASTNode::Break(ast_break) => IR::Break(ir_from_ast_node_break(ast_break)),
+        ASTNode::Continue(ast_continue) => IR::Continue(ir_from_ast_node_continue(ast_continue)),
+        ASTNode::Expression(ast_expression) => {
+            IR::Expression(make_expr!(ast_expression, context, scope_stack_context))
+        }
+    }
+}
+
+fn ir_from_ast_node_block(
+    ast_block_node: &ASTBlockNode,
+    context: &mut UntypedIRContext,
+    scope_stack_context: &mut UntypedIRScopeStackContext,
+) -> IRBlock {
+    IRBlock {
+        ir_vec: ast_block_node
+            .ast_node_vec
+            .iter()
+            .map(|ast_node| ir_from_ast_node(ast_node, context, scope_stack_context))
+            .collect(),
+    }
+}
+
+fn ir_from_ast_node_if(
+    ast_if_node: &ASTIfNode,
+    context: &mut UntypedIRContext,
+    scope_stack_context: &mut UntypedIRScopeStackContext,
+) -> IRIf {
+    IRIf {
+        criteria: make_expr!(&ast_if_node.criteria, context, scope_stack_context),
+        if_block: ir_from_ast_node_block(&ast_if_node.if_ast_block, context, scope_stack_context),
+        else_block: ast_if_node
+            .else_ast_block
+            .clone()
+            .map(|else_ast_block| match else_ast_block {
+                ASTIfElseNode::Else(block_node) => {
+                    ir_from_ast_node_block(&block_node, context, scope_stack_context)
+                }
+                ASTIfElseNode::ElseIf(if_node) => IRBlock {
+                    ir_vec: vec![IR::If(ir_from_ast_node_if(
+                        &if_node,
+                        context,
+                        scope_stack_context,
+                    ))],
+                },
+            }),
+    }
+}
+
+fn ir_from_ast_node_for(
+    ast_for_node: &ASTForNode,
+    context: &mut UntypedIRContext,
+    scope_stack_context: &mut UntypedIRScopeStackContext,
+) -> IRLoop {
+    IRLoop {
+        label: ast_for_node.label.clone(),
+        body_block: match &ast_for_node.head {
+            ASTForHeadNode::Infinite => {
+                ir_from_ast_node_block(&ast_for_node.body_ast_block, context, scope_stack_context)
+            }
+            ASTForHeadNode::WithCriteria(criteria_node) => IRBlock {
+                ir_vec: vec![IR::If(IRIf {
+                    criteria: make_expr!(&criteria_node, context, scope_stack_context),
+                    if_block: IRBlock {
+                        ir_vec: vec![IR::Break(IRBreak { label: None })],
+                    },
+                    else_block: None,
+                })]
+                .into_iter()
+                .chain(
+                    ir_from_ast_node_block(
+                        &ast_for_node.body_ast_block,
+                        context,
+                        scope_stack_context,
+                    )
+                    .ir_vec,
+                )
+                .collect(),
+            },
+            ASTForHeadNode::WithIterator(..) => unimplemented!(),
+        },
+    }
+}
+
+fn ir_from_ast_node_with(
+    ast_with_node: &ASTWithNode,
+    context: &mut UntypedIRContext,
+    scope_stack_context: &mut UntypedIRScopeStackContext,
+) -> IRBlock {
+    IRBlock {
+        ir_vec: ast_with_node
+            .temporary_vec
+            .iter()
+            .map(|temporary| {
+                IR::Let(IRLet {
+                    variable: {
+                        let variable_id = context.new_variable();
+                        context.scope_vec[scope_stack_context.current()]
+                            .new_variable(&temporary.variable, variable_id);
+                        variable_id
+                    },
+                    expression: Some(make_expr!(
+                        &temporary.expression,
+                        context,
+                        scope_stack_context
+                    )),
+                    ty: None,
+                })
+            })
+            .collect::<Vec<IR>>()
+            .into_iter()
+            .chain(
+                ir_from_ast_node_block(&ast_with_node.ast_block, context, scope_stack_context)
+                    .ir_vec,
+            )
+            .collect(),
+    }
+}
+
+fn ir_from_ast_node_let(
+    ast_let_node: &ASTLetNode,
+    context: &mut UntypedIRContext,
+    scope_stack_context: &mut UntypedIRScopeStackContext,
+) -> IRLet {
+    IRLet {
+        variable: {
+            let variable_id = context.new_variable();
+            context.scope_vec[scope_stack_context.current()]
+                .new_variable(&ast_let_node.variable, variable_id);
+            variable_id
+        },
+        expression: ast_let_node
+            .expression
+            .clone()
+            .map(|expression| make_expr!(&expression, context, scope_stack_context)),
+        ty: ast_let_node.ty.clone().map(|ty| IRType::from_ast_type(ty)),
+    }
+}
+
+fn ir_from_ast_node_ret(
+    ast_ret_node: &ASTRetNode,
+    context: &mut UntypedIRContext,
+    scope_stack_context: &mut UntypedIRScopeStackContext,
+) -> IRRet {
+    IRRet {
+        expression: ast_ret_node
+            .expression
+            .clone()
+            .map(|expression| make_expr!(&expression, context, scope_stack_context)),
+    }
 }
 
 fn ir_from_ast_node_break(ast_break_node: &ASTBreakNode) -> IRBreak {
-	IRBreak {
-		label: ast_break_node.label.clone(),
-	}
+    IRBreak {
+        label: ast_break_node.label.clone(),
+    }
 }
 
 fn ir_from_ast_node_continue(ast_continue_node: &ASTContinueNode) -> IRContinue {
-	IRContinue {
-		label: ast_continue_node.label.clone(),
-	}
+    IRContinue {
+        label: ast_continue_node.label.clone(),
+    }
 }
 
-fn ir_from_ast_node_expression(ast_expression_node: &ASTExpressionNode) -> IRExpression {
-	match ast_expression_node {
-		ASTExpressionNode::Assignment(inner_node) => IRExpression::Assignment(IRAssignment {
-			lhs: ir_from_ast_node_left_value(&inner_node.lhs),
-			rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-		}),
-		ASTExpressionNode::AdditionAssignment(inner_node) => {
-			IRExpression::AdditionAssignment(IRAdditionAssignment {
-				lhs: ir_from_ast_node_left_value(&inner_node.lhs),
-				rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-			})
-		}
-		ASTExpressionNode::SubtractionAssignment(inner_node) => {
-			IRExpression::SubtractionAssignment(IRSubtractionAssignment {
-				lhs: ir_from_ast_node_left_value(&inner_node.lhs),
-				rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-			})
-		}
-		ASTExpressionNode::MultiplicationAssignment(inner_node) => {
-			IRExpression::MultiplicationAssignment(IRMultiplicationAssignment {
-				lhs: ir_from_ast_node_left_value(&inner_node.lhs),
-				rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-			})
-		}
-		ASTExpressionNode::DivisionAssignment(inner_node) => {
-			IRExpression::DivisionAssignment(IRDivisionAssignment {
-				lhs: ir_from_ast_node_left_value(&inner_node.lhs),
-				rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-			})
-		}
-		ASTExpressionNode::ModuloAssignment(inner_node) => {
-			IRExpression::ModuloAssignment(IRModuloAssignment {
-				lhs: ir_from_ast_node_left_value(&inner_node.lhs),
-				rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-			})
-		}
-		ASTExpressionNode::ShiftLeftAssignment(inner_node) => {
-			IRExpression::ShiftLeftAssignment(IRShiftLeftAssignment {
-				lhs: ir_from_ast_node_left_value(&inner_node.lhs),
-				rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-			})
-		}
-		ASTExpressionNode::ShiftRightAssignment(inner_node) => {
-			IRExpression::ShiftRightAssignment(IRShiftRightAssignment {
-				lhs: ir_from_ast_node_left_value(&inner_node.lhs),
-				rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-			})
-		}
-		ASTExpressionNode::BitOrAssignment(inner_node) => {
-			IRExpression::BitOrAssignment(IRBitOrAssignment {
-				lhs: ir_from_ast_node_left_value(&inner_node.lhs),
-				rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-			})
-		}
-		ASTExpressionNode::BitAndAssignment(inner_node) => {
-			IRExpression::BitAndAssignment(IRBitAndAssignment {
-				lhs: ir_from_ast_node_left_value(&inner_node.lhs),
-				rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-			})
-		}
-		ASTExpressionNode::BitXorAssignment(inner_node) => {
-			IRExpression::BitXorAssignment(IRBitXorAssignment {
-				lhs: ir_from_ast_node_left_value(&inner_node.lhs),
-				rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-			})
-		}
-		ASTExpressionNode::BitNotAssignment(inner_node) => {
-			IRExpression::BitNotAssignment(IRBitNotAssignment {
-				lhs: ir_from_ast_node_left_value(&inner_node.lhs),
-				rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-			})
-		}
-		ASTExpressionNode::LogicalOr(inner_node) => IRExpression::LogicalOr(IRLogicalOr {
-			lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-			rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-		}),
-		ASTExpressionNode::LogicalAnd(inner_node) => IRExpression::LogicalAnd(IRLogicalAnd {
-			lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-			rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-		}),
-		ASTExpressionNode::LogicalNot(inner_node) => IRExpression::LogicalNot(IRLogicalNot {
-			lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-		}),
-		ASTExpressionNode::TestEqual(inner_node) => IRExpression::TestEqual(IRTestEqual {
-			lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-			rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-		}),
-		ASTExpressionNode::TestNotEqual(inner_node) => IRExpression::TestNotEqual(IRTestNotEqual {
-			lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-			rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-		}),
-		ASTExpressionNode::TestLess(inner_node) => IRExpression::TestLess(IRTestLess {
-			lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-			rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-		}),
-		ASTExpressionNode::TestLessEqual(inner_node) => {
-			IRExpression::TestLessEqual(IRTestLessEqual {
-				lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-				rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-			})
-		}
-		ASTExpressionNode::TestGreater(inner_node) => IRExpression::TestGreater(IRTestGreater {
-			lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-			rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-		}),
-		ASTExpressionNode::TestGreaterEqual(inner_node) => {
-			IRExpression::TestGreaterEqual(IRTestGreaterEqual {
-				lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-				rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-			})
-		}
-		ASTExpressionNode::Addition(inner_node) => IRExpression::Addition(IRAddition {
-			lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-			rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-		}),
-		ASTExpressionNode::Subtraction(inner_node) => IRExpression::Subtraction(IRSubtraction {
-			lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-			rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-		}),
-		ASTExpressionNode::Multiplication(inner_node) => {
-			IRExpression::Multiplication(IRMultiplication {
-				lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-				rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-			})
-		}
-		ASTExpressionNode::Division(inner_node) => IRExpression::Division(IRDivision {
-			lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-			rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-		}),
-		ASTExpressionNode::Modulo(inner_node) => IRExpression::Modulo(IRModulo {
-			lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-			rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-		}),
-		ASTExpressionNode::ShiftLeft(inner_node) => IRExpression::ShiftLeft(IRShiftLeft {
-			lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-			rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-		}),
-		ASTExpressionNode::ShiftRight(inner_node) => IRExpression::ShiftRight(IRShiftRight {
-			lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-			rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-		}),
-		ASTExpressionNode::BitOr(inner_node) => IRExpression::BitOr(IRBitOr {
-			lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-			rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-		}),
-		ASTExpressionNode::BitAnd(inner_node) => IRExpression::BitAnd(IRBitAnd {
-			lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-			rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-		}),
-		ASTExpressionNode::BitXor(inner_node) => IRExpression::BitXor(IRBitXor {
-			lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-			rhs: Box::new(ir_from_ast_node_expression(&inner_node.rhs)),
-		}),
-		ASTExpressionNode::BitNot(inner_node) => IRExpression::BitNot(IRBitNot {
-			lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-		}),
-		ASTExpressionNode::Cast(inner_node) => IRExpression::Cast(IRCast {
-			lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-			ty: IRType::from_ast_type(inner_node.ty.clone()),
-		}),
-		ASTExpressionNode::From(..) => unimplemented!(),
-		ASTExpressionNode::Paren(inner_node) => ir_from_ast_node_expression(&inner_node.lhs),
-		ASTExpressionNode::UnaryPositive(inner_node) => {
-			ir_from_ast_node_expression(&inner_node.lhs)
-		}
-		ASTExpressionNode::UnaryNegative(inner_node) => {
-			IRExpression::UnaryNegative(IRUnaryNegative {
-				lhs: Box::new(ir_from_ast_node_expression(&inner_node.lhs)),
-			})
-		}
-		ASTExpressionNode::Call(inner_node) => {
-			IRExpression::Call(ir_from_ast_node_call(&inner_node))
-		}
-		ASTExpressionNode::LeftValue(inner_node) => {
-			IRExpression::LeftValue(ir_from_ast_node_left_value(&inner_node))
-		}
-		ASTExpressionNode::Literal(inner_node) => {
-			IRExpression::Literal(ir_from_ast_node_literal(&inner_node))
-		}
-	}
+fn ir_from_ast_node_expression(
+    ast_expression_node: &ASTExpressionNode,
+    context: &mut UntypedIRContext,
+    scope_stack_context: &mut UntypedIRScopeStackContext,
+) -> IRExpression {
+    match ast_expression_node {
+        ASTExpressionNode::Assignment(inner_node) => IRExpression::Assignment(IRAssignment {
+            lhs: ir_from_ast_node_left_value(&inner_node.lhs, context, scope_stack_context),
+            rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+        }),
+        ASTExpressionNode::AdditionAssignment(inner_node) => {
+            IRExpression::AdditionAssignment(IRAdditionAssignment {
+                lhs: ir_from_ast_node_left_value(&inner_node.lhs, context, scope_stack_context),
+                rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+            })
+        }
+        ASTExpressionNode::SubtractionAssignment(inner_node) => {
+            IRExpression::SubtractionAssignment(IRSubtractionAssignment {
+                lhs: ir_from_ast_node_left_value(&inner_node.lhs, context, scope_stack_context),
+                rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+            })
+        }
+        ASTExpressionNode::MultiplicationAssignment(inner_node) => {
+            IRExpression::MultiplicationAssignment(IRMultiplicationAssignment {
+                lhs: ir_from_ast_node_left_value(&inner_node.lhs, context, scope_stack_context),
+                rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+            })
+        }
+        ASTExpressionNode::DivisionAssignment(inner_node) => {
+            IRExpression::DivisionAssignment(IRDivisionAssignment {
+                lhs: ir_from_ast_node_left_value(&inner_node.lhs, context, scope_stack_context),
+                rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+            })
+        }
+        ASTExpressionNode::ModuloAssignment(inner_node) => {
+            IRExpression::ModuloAssignment(IRModuloAssignment {
+                lhs: ir_from_ast_node_left_value(&inner_node.lhs, context, scope_stack_context),
+                rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+            })
+        }
+        ASTExpressionNode::ShiftLeftAssignment(inner_node) => {
+            IRExpression::ShiftLeftAssignment(IRShiftLeftAssignment {
+                lhs: ir_from_ast_node_left_value(&inner_node.lhs, context, scope_stack_context),
+                rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+            })
+        }
+        ASTExpressionNode::ShiftRightAssignment(inner_node) => {
+            IRExpression::ShiftRightAssignment(IRShiftRightAssignment {
+                lhs: ir_from_ast_node_left_value(&inner_node.lhs, context, scope_stack_context),
+                rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+            })
+        }
+        ASTExpressionNode::BitOrAssignment(inner_node) => {
+            IRExpression::BitOrAssignment(IRBitOrAssignment {
+                lhs: ir_from_ast_node_left_value(&inner_node.lhs, context, scope_stack_context),
+                rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+            })
+        }
+        ASTExpressionNode::BitAndAssignment(inner_node) => {
+            IRExpression::BitAndAssignment(IRBitAndAssignment {
+                lhs: ir_from_ast_node_left_value(&inner_node.lhs, context, scope_stack_context),
+                rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+            })
+        }
+        ASTExpressionNode::BitXorAssignment(inner_node) => {
+            IRExpression::BitXorAssignment(IRBitXorAssignment {
+                lhs: ir_from_ast_node_left_value(&inner_node.lhs, context, scope_stack_context),
+                rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+            })
+        }
+        ASTExpressionNode::BitNotAssignment(inner_node) => {
+            IRExpression::BitNotAssignment(IRBitNotAssignment {
+                lhs: ir_from_ast_node_left_value(&inner_node.lhs, context, scope_stack_context),
+                rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+            })
+        }
+        ASTExpressionNode::LogicalOr(inner_node) => IRExpression::LogicalOr(IRLogicalOr {
+            lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+            rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+        }),
+        ASTExpressionNode::LogicalAnd(inner_node) => IRExpression::LogicalAnd(IRLogicalAnd {
+            lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+            rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+        }),
+        ASTExpressionNode::LogicalNot(inner_node) => IRExpression::LogicalNot(IRLogicalNot {
+            lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+        }),
+        ASTExpressionNode::TestEqual(inner_node) => IRExpression::TestEqual(IRTestEqual {
+            lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+            rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+        }),
+        ASTExpressionNode::TestNotEqual(inner_node) => IRExpression::TestNotEqual(IRTestNotEqual {
+            lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+            rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+        }),
+        ASTExpressionNode::TestLess(inner_node) => IRExpression::TestLess(IRTestLess {
+            lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+            rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+        }),
+        ASTExpressionNode::TestLessEqual(inner_node) => {
+            IRExpression::TestLessEqual(IRTestLessEqual {
+                lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+                rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+            })
+        }
+        ASTExpressionNode::TestGreater(inner_node) => IRExpression::TestGreater(IRTestGreater {
+            lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+            rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+        }),
+        ASTExpressionNode::TestGreaterEqual(inner_node) => {
+            IRExpression::TestGreaterEqual(IRTestGreaterEqual {
+                lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+                rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+            })
+        }
+        ASTExpressionNode::Addition(inner_node) => IRExpression::Addition(IRAddition {
+            lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+            rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+        }),
+        ASTExpressionNode::Subtraction(inner_node) => IRExpression::Subtraction(IRSubtraction {
+            lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+            rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+        }),
+        ASTExpressionNode::Multiplication(inner_node) => {
+            IRExpression::Multiplication(IRMultiplication {
+                lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+                rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+            })
+        }
+        ASTExpressionNode::Division(inner_node) => IRExpression::Division(IRDivision {
+            lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+            rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+        }),
+        ASTExpressionNode::Modulo(inner_node) => IRExpression::Modulo(IRModulo {
+            lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+            rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+        }),
+        ASTExpressionNode::ShiftLeft(inner_node) => IRExpression::ShiftLeft(IRShiftLeft {
+            lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+            rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+        }),
+        ASTExpressionNode::ShiftRight(inner_node) => IRExpression::ShiftRight(IRShiftRight {
+            lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+            rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+        }),
+        ASTExpressionNode::BitOr(inner_node) => IRExpression::BitOr(IRBitOr {
+            lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+            rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+        }),
+        ASTExpressionNode::BitAnd(inner_node) => IRExpression::BitAnd(IRBitAnd {
+            lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+            rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+        }),
+        ASTExpressionNode::BitXor(inner_node) => IRExpression::BitXor(IRBitXor {
+            lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+            rhs: make_expr!(&inner_node.rhs, context, scope_stack_context),
+        }),
+        ASTExpressionNode::BitNot(inner_node) => IRExpression::BitNot(IRBitNot {
+            lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+        }),
+        ASTExpressionNode::Cast(inner_node) => IRExpression::Cast(IRCast {
+            lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+            ty: IRType::from_ast_type(inner_node.ty.clone()),
+        }),
+        ASTExpressionNode::From(..) => unimplemented!(),
+        ASTExpressionNode::Paren(inner_node) => {
+            ir_from_ast_node_expression(&inner_node.lhs, context, scope_stack_context)
+        }
+        ASTExpressionNode::UnaryPositive(inner_node) => {
+            ir_from_ast_node_expression(&inner_node.lhs, context, scope_stack_context)
+        }
+        ASTExpressionNode::UnaryNegative(inner_node) => {
+            IRExpression::UnaryNegative(IRUnaryNegative {
+                lhs: make_expr!(&inner_node.lhs, context, scope_stack_context),
+            })
+        }
+        ASTExpressionNode::Call(inner_node) => IRExpression::Call(ir_from_ast_node_call(
+            &inner_node,
+            context,
+            scope_stack_context,
+        )),
+        ASTExpressionNode::LeftValue(inner_node) => IRExpression::LeftValue(
+            ir_from_ast_node_left_value(&inner_node, context, scope_stack_context),
+        ),
+        ASTExpressionNode::Literal(inner_node) => {
+            IRExpression::Literal(ir_from_ast_node_literal(&inner_node))
+        }
+    }
 }
 
-fn ir_from_ast_node_call(ast_call_node: &ASTCallNode) -> IRCall {
-	IRCall {
-		function: ast_call_node.function.clone(),
-		argument_vec: ast_call_node
-			.argument_vec
-			.iter()
-			.map(|expression| ir_from_ast_node_expression(expression))
-			.collect(),
-	}
+fn ir_from_ast_node_call(
+    ast_call_node: &ASTCallNode,
+    context: &mut UntypedIRContext,
+    scope_stack_context: &mut UntypedIRScopeStackContext,
+) -> IRCall {
+    IRCall {
+        function: ast_call_node.function.clone(),
+        argument_vec: ast_call_node
+            .argument_vec
+            .iter()
+            .map(|expression| make_expr!(expression, context, scope_stack_context))
+            .collect(),
+    }
 }
 
-fn ir_from_ast_node_left_value(ast_left_value_node: &ASTLeftValueNode) -> IRLeftValue {
-	IRLeftValue::Identifier(IRIdentifier {
-		name: ast_left_value_node.variable.clone(),
-	})
+fn ir_from_ast_node_left_value(
+    ast_left_value_node: &ASTLeftValueNode,
+    context: &mut UntypedIRContext,
+    scope_stack_context: &mut UntypedIRScopeStackContext,
+) -> IRLeftValue {
+    IRLeftValue::Identifier(
+        scope_stack_context
+            .lookup_variable(&ast_left_value_node.variable, context)
+            .expect(&format!(
+                "the variable {} is not defined",
+                ast_left_value_node.variable
+            )),
+    )
 }
 
 fn ir_from_ast_node_literal(ast_literal_node: &ASTLiteralNode) -> IRLiteral {
-	match ast_literal_node {
-		ASTLiteralNode::Bool(literal) => IRLiteral::Bool(literal.clone()),
-		ASTLiteralNode::Integer(literal) => IRLiteral::Integer(literal.clone()),
-		ASTLiteralNode::Decimal(literal) => IRLiteral::Decimal(literal.clone()),
-		ASTLiteralNode::String(literal) => IRLiteral::String(literal.clone()),
-	}
+    match ast_literal_node {
+        ASTLiteralNode::Bool(literal) => IRLiteral::Bool(literal.clone()),
+        ASTLiteralNode::Integer(literal) => IRLiteral::Integer(literal.clone()),
+        ASTLiteralNode::Decimal(literal) => IRLiteral::Decimal(literal.clone()),
+        ASTLiteralNode::String(literal) => IRLiteral::String(literal.clone()),
+    }
 }
