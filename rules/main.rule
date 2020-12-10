@@ -6,7 +6,6 @@ module: @statement-list;
 statement-list: @statement;
 statement-list: @statement-list @statement;
 
-statement: @scope-statement;
 statement: @if-statement;
 statement: @for-statement;
 statement: @with-statement;
@@ -53,13 +52,24 @@ break-statement: KeywordBreak Id;
 continue-statement: KeywordContinue;
 continue-statement: KeywordContinue Id;
 
-lambda-func-def-statement: ParenL ParenR @type Arrow @scope-statement;
-lambda-func-def-statement: ParenL @func-def-statement-param-list ParenR @type Arrow @scope-statement;
+use-statement: KeywordUse @path;
+use-statement: KeywordUse @path Dot @use-statement-item;
+use-statement: KeywordUse @path Dot BraceL @use-statement-item-list BraceR;
 
-func-def-statement: Id ParenL ParenR @type Arrow @scope-statement;
-func-def-statement: Id ParenL @func-def-statement-param-list ParenR @type Arrow @scope-statement;
+use-statement-item: Id;
+use-statement-item: Id KeywordAs Id;
 
+use-statement-item-list: @use-statement-item;
+use-statement-item-list: @use-statement-item-list Comma @use-statement-item;
+
+func-def-statement: KeywordFn Id ParenL ParenR @scope-statement;
+func-def-statement: KeywordFn Id ParenL @func-def-statement-param-list ParenR @scope-statement;
+func-def-statement: KeywordFn Id ParenL ParenR @type @scope-statement;
+func-def-statement: KeywordFn Id ParenL @func-def-statement-param-list ParenR @type @scope-statement;
+
+func-def-statement-param-list: Id;
 func-def-statement-param-list: Id @type;
+func-def-statement-param-list: @func-def-statement-param-list Comma Id;
 func-def-statement-param-list: @func-def-statement-param-list Comma Id @type;
 
 type: KeywordVoid;
@@ -78,6 +88,9 @@ type: KeywordF16;
 type: KeywordF32;
 type: KeywordF64;
 type: KeywordStr;
+
+path: Id;
+path: @path Dot Id;
 
 expression: @assignment;
 

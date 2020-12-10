@@ -6,7 +6,7 @@ use inkwell::values::PointerValue;
 use super::astElem::{new_expression, ASTElemExp, ASTElemStmt};
 use super::astElemStmtScope::ASTElemStmtScope;
 use super::astType::Type;
-use super::gen::{FuncBlockGen, FuncPrototype, ModuleGen};
+use super::gen::{FuncBlockGen, ModuleGen};
 use super::value::{Value, ValueHandler, ValueType, ValueTypeHandler};
 use crate::lexer::Token;
 use crate::parser::AST;
@@ -71,6 +71,8 @@ impl ASTElemStmt for ASTElemStmtIf {
 		}
 	}
 
+	// Should we add some methods to support type interence?
+
 	fn gen_code<'fnc, 'mdl: 'fnc, 'ctx: 'mdl>(
 		&self,
 		ctx: &'ctx Context,
@@ -86,6 +88,13 @@ impl ASTElemStmt for ASTElemStmtIf {
 		}
 
 		let criteria = self.criteria.gen_code(ctx, mdl, fnc);
+
+		let test = fnc.last_block.builder.build_alloca(ctx.bool_type(), "test");
+		test.as_instruction().unwrap();
+
+		if criteria.get_type() != ValueType::Bool {
+			panic!("{} type expected, got {}.", Type::Bool, criteria.get_type());
+		}
 
 		unimplemented!();
 	}

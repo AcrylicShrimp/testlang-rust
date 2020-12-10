@@ -15,7 +15,7 @@ pub struct ASTElemStmtScope {
 }
 
 impl ASTElemStmtScope {
-	pub fn new(ast: &AST) -> ASTElemStmtScope {
+	pub fn new(ast: &AST, need_cleanup: bool) -> ASTElemStmtScope {
 		if ast.name != "scope-statement" {
 			panic!("scope-statement AST expected, got {}.", ast.name);
 		}

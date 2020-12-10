@@ -53,20 +53,20 @@ pub struct FuncPrototype<'ctx> {
 // 1. Functions: its name, signature, and linkage types with its scope range.
 // 1. Scopes - NOTE: We must allocate scopes for each depth levels.
 // 1. Loop locations - We can identify loops as astElemLoop or astElemFor, so we can just 'register' them.
+// pub struct FuncGen<'ctx> {
+//     pub prototype: FuncPrototype<'ctx>,
+//     pub scope_stack: Vec<ScopeGen<'ctx>>, // Is there no other way to represent scopes?
+//                                           // pub loop_stack: Vec<astElemStmtFor>
+// }
+
 pub struct FuncGen<'ctx> {
     pub prototype: FuncPrototype<'ctx>,
-    pub scope_stack: Vec<ScopeGen<'ctx>>, // Is there no other way to represent scopes?
-                                          // pub loop_stack: Vec<astElemStmtFor>
+    pub last_block: BlockGen<'ctx>,
 }
 
 pub struct BlockGen<'ctx> {
-    pub block: BasicBlock,
+    pub block: BasicBlock<'ctx>,
     pub builder: Builder<'ctx>,
-}
-
-pub struct FuncBlockGen<'ctx> {
-    pub func: FuncGen<'ctx>,
-    pub last_block: BlockGen<'ctx>,
 }
 
 pub struct ScopeGen<'ctx> {
@@ -146,7 +146,7 @@ impl<'mdl, 'ctx: 'mdl> ModuleGen<'ctx> {
         param_type_vec: Vec<ValueType>,
         param_name_vec: Vec<String>,
         variadic_param: bool,
-    ) -> FuncBlockGen<'ctx> {
+    ) -> FuncGen<'ctx> {
         if self.function_prototype_table.contains_key(name) {
             panic!("function {} is already exists.", name);
         }
@@ -230,109 +230,109 @@ impl<'mdl, 'ctx: 'mdl> ModuleGen<'ctx> {
 }
 
 impl<'bdr, 'fnc: 'bdr, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
-    pub fn end_function(
-        mut self,
-        module: &'mdl mut ModuleGen<'ctx>,
-        last_block: &'fnc mut BlockGen<'ctx>,
-    ) {
-        if self.scope_stack.len() != 1 {
-            panic!("scope not yet closed.");
-        }
+    // pub fn end_function(
+    //     mut self,
+    //     module: &'mdl mut ModuleGen<'ctx>,
+    //     last_block: &'fnc mut BlockGen<'ctx>,
+    // ) {
+    //     if self.scope_stack.len() != 1 {
+    //         panic!("scope not yet closed.");
+    //     }
 
-        self.end_scope(module, last_block);
+    //     self.end_scope(module, last_block);
 
-        let blocks = self.prototype.function.get_basic_blocks();
+    //     let blocks = self.prototype.function.get_basic_blocks();
 
-        if self.prototype.return_type == ValueType::Void
-            && blocks.last().unwrap().get_terminator().is_none()
-        {
-            last_block.builder.build_return(None);
-        }
+    //     if self.prototype.return_type == ValueType::Void
+    //         && blocks.last().unwrap().get_terminator().is_none()
+    //     {
+    //         last_block.builder.build_return(None);
+    //     }
 
-        let pass_mgr = PassManager::<FunctionValue<'ctx>>::create(&module.module);
-        pass_mgr.add_cfg_simplification_pass();
-        pass_mgr.add_verifier_pass();
-        pass_mgr.initialize();
-        pass_mgr.run_on(&self.prototype.function);
-    }
+    //     let pass_mgr = PassManager::<FunctionValue<'ctx>>::create(&module.module);
+    //     pass_mgr.add_cfg_simplification_pass();
+    //     pass_mgr.add_verifier_pass();
+    //     pass_mgr.initialize();
+    //     pass_mgr.run_on(&self.prototype.function);
+    // }
 
-    pub fn create_scope(
-        &'fnc mut self,
-        module: &'mdl mut ModuleGen<'ctx>,
-        last_block: &'fnc mut BlockGen<'ctx>,
-        need_explicit_removal: bool,
-    ) {
-        self.scope_stack.push(ScopeGen {
-            variable_map: HashMap::new(),
-            stack_position: if need_explicit_removal {
-                Some(
-                    last_block
-                        .builder
-                        .build_call(
-                            module
-                                .function_prototype_table
-                                .get("llvm.stacksave")
-                                .expect("intrinsic function 'llvm.stacksave' not found.")
-                                .function,
-                            vec![].as_slice(),
-                            "stacksave",
-                        )
-                        .try_as_basic_value()
-                        .left()
-                        .unwrap(),
-                )
-            } else {
-                None
-            },
-        });
-    }
+    // pub fn create_scope(
+    //     &'fnc mut self,
+    //     module: &'mdl mut ModuleGen<'ctx>,
+    //     last_block: &'fnc mut BlockGen<'ctx>,
+    //     need_explicit_removal: bool,
+    // ) {
+    //     self.scope_stack.push(ScopeGen {
+    //         variable_map: HashMap::new(),
+    //         stack_position: if need_explicit_removal {
+    //             Some(
+    //                 last_block
+    //                     .builder
+    //                     .build_call(
+    //                         module
+    //                             .function_prototype_table
+    //                             .get("llvm.stacksave")
+    //                             .expect("intrinsic function 'llvm.stacksave' not found.")
+    //                             .function,
+    //                         vec![].as_slice(),
+    //                         "stacksave",
+    //                     )
+    //                     .try_as_basic_value()
+    //                     .left()
+    //                     .unwrap(),
+    //             )
+    //         } else {
+    //             None
+    //         },
+    //     });
+    // }
 
-    pub fn end_scope(
-        &'fnc mut self,
-        module: &'mdl mut ModuleGen<'ctx>,
-        last_block: &'fnc mut BlockGen<'ctx>,
-    ) {
-        if self.scope_stack.last().unwrap().stack_position.is_some() {
-            last_block.builder.build_call(
-                module
-                    .function_prototype_table
-                    .get("llvm.stackrestore")
-                    .expect("intrinsic function 'llvm.stackrestore' not found.")
-                    .function,
-                vec![self.scope_stack.pop().unwrap().stack_position.unwrap()].as_slice(),
-                "stackrestore",
-            );
-        }
+    // pub fn end_scope(
+    //     &'fnc mut self,
+    //     module: &'mdl mut ModuleGen<'ctx>,
+    //     last_block: &'fnc mut BlockGen<'ctx>,
+    // ) {
+    //     if self.scope_stack.last().unwrap().stack_position.is_some() {
+    //         last_block.builder.build_call(
+    //             module
+    //                 .function_prototype_table
+    //                 .get("llvm.stackrestore")
+    //                 .expect("intrinsic function 'llvm.stackrestore' not found.")
+    //                 .function,
+    //             vec![self.scope_stack.pop().unwrap().stack_position.unwrap()].as_slice(),
+    //             "stackrestore",
+    //         );
+    //     }
 
-        self.scope_stack.pop();
-    }
+    //     self.scope_stack.pop();
+    // }
 
-    pub fn end_scope_runtime(
-        &'fnc mut self,
-        module: &'mdl mut ModuleGen<'ctx>,
-        last_block: &'fnc mut BlockGen<'ctx>,
-        count: usize,
-    ) {
-        for index in 0..self.scope_stack.len() - count {
-            if self.scope_stack[self.scope_stack.len() - 1 - index]
-                .stack_position
-                .is_some()
-            {
-                last_block.builder.build_call(
-                    module
-                        .function_prototype_table
-                        .get("llvm.stackrestore")
-                        .expect("intrinsic function 'llvm.stackrestore' not found.")
-                        .function,
-                    vec![self.scope_stack[self.scope_stack.len() - 1 - index]
-                        .stack_position
-                        .unwrap()]
-                    .as_slice(),
-                    "stackrestore RUNTIME",
-                );
-            }
-        }
-    }
+    // pub fn end_scope_runtime(
+    //     &'fnc mut self,
+    //     module: &'mdl mut ModuleGen<'ctx>,
+    //     last_block: &'fnc mut BlockGen<'ctx>,
+    //     count: usize,
+    // ) {
+    //     for index in 0..self.scope_stack.len() - count {
+    //         if self.scope_stack[self.scope_stack.len() - 1 - index]
+    //             .stack_position
+    //             .is_some()
+    //         {
+    //             last_block.builder.build_call(
+    //                 module
+    //                     .function_prototype_table
+    //                     .get("llvm.stackrestore")
+    //                     .expect("intrinsic function 'llvm.stackrestore' not found.")
+    //                     .function,
+    //                 vec![self.scope_stack[self.scope_stack.len() - 1 - index]
+    //                     .stack_position
+    //                     .unwrap()]
+    //                 .as_slice(),
+    //                 "stackrestore RUNTIME",
+    //             );
+    //         }
+    //     }
+    // }
 
     pub fn create_variable(
         &'fnc mut self,
@@ -374,7 +374,7 @@ impl<'ctx> BlockGen<'ctx> {
     pub fn new(context: &'ctx Context, function: FunctionValue<'ctx>, name: &str) -> Self {
         let block = context.append_basic_block(function, name);
         let builder = context.create_builder();
-        builder.position_at_end(&block);
+        builder.position_at_end(block);
 
         BlockGen {
             block: block,
@@ -382,9 +382,9 @@ impl<'ctx> BlockGen<'ctx> {
         }
     }
 
-    pub fn from(context: &'ctx Context, block: BasicBlock) -> Self {
+    pub fn from(context: &'ctx Context, block: BasicBlock<'ctx>) -> Self {
         let builder = context.create_builder();
-        builder.position_at_end(&block);
+        builder.position_at_end(block);
         BlockGen {
             block: block,
             builder: builder,
@@ -392,11 +392,11 @@ impl<'ctx> BlockGen<'ctx> {
     }
 
     pub fn connect_to(&self, to: &Self) {
-        self.builder.build_unconditional_branch(&to.block);
+        self.builder.build_unconditional_branch(to.block);
     }
 
     pub fn connect_to_if(&self, criteria: IntValue<'ctx>, to_then: &Self, to_else: &Self) {
         self.builder
-            .build_conditional_branch(criteria, &to_then.block, &to_else.block);
+            .build_conditional_branch(criteria, to_then.block, to_else.block);
     }
 }

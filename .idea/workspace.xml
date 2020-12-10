@@ -1,0 +1,219 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="BranchesTreeState">
+    <expand>
+      <path>
+        <item name="ROOT" type="e8cecc67:BranchNodeDescriptor" />
+        <item name="LOCAL_ROOT" type="e8cecc67:BranchNodeDescriptor" />
+      </path>
+      <path>
+        <item name="ROOT" type="e8cecc67:BranchNodeDescriptor" />
+        <item name="REMOTE_ROOT" type="e8cecc67:BranchNodeDescriptor" />
+      </path>
+      <path>
+        <item name="ROOT" type="e8cecc67:BranchNodeDescriptor" />
+        <item name="REMOTE_ROOT" type="e8cecc67:BranchNodeDescriptor" />
+        <item name="GROUP_NODE:origin" type="e8cecc67:BranchNodeDescriptor" />
+      </path>
+    </expand>
+    <select />
+  </component>
+  <component name="CMakeRunConfigurationManager" shouldGenerate="true" shouldDeleteObsolete="true">
+    <generated />
+  </component>
+  <component name="CMakeSettings">
+    <configurations>
+      <configuration PROFILE_NAME="Debug" CONFIG_NAME="Debug" />
+    </configurations>
+  </component>
+  <component name="CargoProjects">
+    <cargoProject FILE="$PROJECT_DIR$/Cargo.toml" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="ecb62d8d-b03d-412f-8eab-be191dc62ea9" name="Default Changelist" comment="">
+      <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/runConfigurations/Run.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/testlang-rust.iml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/rules/main.rule" beforeDir="false" afterPath="$PROJECT_DIR$/rules/main.rule" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/rules/main.rule.json" beforeDir="false" afterPath="$PROJECT_DIR$/rules/main.rule.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/sources/test.tl" beforeDir="false" afterPath="$PROJECT_DIR$/sources/test.tl" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/codegen/ast.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/codegen/ast.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/codegen/astElem.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/codegen/astElem.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/codegen/astElemStmtIf.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/codegen/astElemStmtIf.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/codegen/astElemStmtScope.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/codegen/astElemStmtScope.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/codegen/astType.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/codegen/astType.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/codegen/gen.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/codegen/gen.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/codegen/generator.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/codegen/generator.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/codegen/typed_ir.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/codegen/typed_ir.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/codegen/untyped_ir.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/codegen/untyped_ir.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/lexer.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/lexer.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/main.rs" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="ClangdSettings">
+    <option name="formatViaClangd" value="false" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Rust File" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="MacroExpansionManager">
+    <option name="directoryName" value="zbweorcj" />
+  </component>
+  <component name="ProjectId" id="1iIhMhgmQdyUM44cwoXakRF9MBo" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">
+    <property name="RunOnceActivity.OpenProjectViewOnStart" value="true" />
+    <property name="WebServerToolWindowFactoryState" value="false" />
+    <property name="cf.first.check.clang-format" value="false" />
+    <property name="last_opened_file_path" value="$PROJECT_DIR$" />
+    <property name="nodejs_package_manager_path" value="npm" />
+    <property name="org.rust.cargo.project.model.PROJECT_DISCOVERY" value="true" />
+    <property name="settings.editor.selected.configurable" value="language.rust.rustfmt" />
+  </component>
+  <component name="RunManager">
+    <configuration default="true" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" PASS_PARENT_ENVS_2="true">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+  </component>
+  <component name="RustProjectSettings">
+    <option name="runRustfmtOnSave" value="true" />
+    <option name="toolchainHomeDirectory" value="$USER_HOME$/.cargo/bin" />
+    <option name="version" value="2" />
+  </component>
+  <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="application-level" UseSingleDictionary="true" transferred="true" />
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="ecb62d8d-b03d-412f-8eab-be191dc62ea9" name="Default Changelist" comment="" />
+      <created>1601600967101</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1601600967101</updated>
+      <workItem from="1601600968166" duration="5099000" />
+      <workItem from="1601692260410" duration="185000" />
+      <workItem from="1601959842841" duration="56000" />
+      <workItem from="1601959918182" duration="8257000" />
+      <workItem from="1602043238470" duration="80000" />
+      <workItem from="1602547981382" duration="17092000" />
+      <workItem from="1602635215124" duration="9599000" />
+      <workItem from="1602654038775" duration="37029000" />
+      <workItem from="1603355935409" duration="1957000" />
+    </task>
+    <task id="LOCAL-00001" summary="FEAT: Implemented basic type inferences.">
+      <created>1602734240498</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1602734240498</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="UnknownFeatures">
+    <option featureType="com.intellij.fileTypeFactory" implementationName="*.tl" />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+    <option name="oldMeFiltersMigrated" value="true" />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="FEAT: Implemented basic type inferences." />
+    <option name="LAST_COMMIT_MESSAGE" value="FEAT: Implemented basic type inferences." />
+  </component>
+  <component name="WindowStateProjectService">
+    <state x="303" y="184" key="#com.intellij.execution.impl.EditConfigurationsDialog" timestamp="1601601062698">
+      <screen x="0" y="0" width="1680" height="1050" />
+    </state>
+    <state x="303" y="184" key="#com.intellij.execution.impl.EditConfigurationsDialog/0.0.1680.1050@0.0.1680.1050" timestamp="1601601062698" />
+    <state x="653" y="245" key="#com.intellij.ide.util.MemberChooser" timestamp="1602555764496">
+      <screen x="0" y="0" width="1680" height="1050" />
+    </state>
+    <state x="653" y="245" key="#com.intellij.ide.util.MemberChooser/0.0.1680.1050@0.0.1680.1050" timestamp="1602555764496" />
+    <state x="578" y="276" key="#com.intellij.refactoring.safeDelete.UnsafeUsagesDialog" timestamp="1601601565982">
+      <screen x="0" y="0" width="1680" height="1050" />
+    </state>
+    <state x="578" y="276" key="#com.intellij.refactoring.safeDelete.UnsafeUsagesDialog/0.0.1680.1050@0.0.1680.1050" timestamp="1601601565982" />
+    <state x="100" y="100" width="1480" height="850" key="DiffContextDialog" timestamp="1602652990467">
+      <screen x="0" y="0" width="1680" height="1050" />
+    </state>
+    <state x="100" y="100" width="1480" height="850" key="DiffContextDialog/0.0.1680.1050@0.0.1680.1050" timestamp="1602652990467" />
+    <state x="628" y="284" key="FileChooserDialogImpl" timestamp="1601601009769">
+      <screen x="0" y="0" width="1680" height="1050" />
+    </state>
+    <state x="628" y="284" key="FileChooserDialogImpl/0.0.1680.1050@0.0.1680.1050" timestamp="1601601009769" />
+    <state width="1638" height="726" key="GridCell.Tab.0.bottom" timestamp="1603414975222">
+      <screen x="0" y="0" width="1680" height="1050" />
+    </state>
+    <state width="1638" height="726" key="GridCell.Tab.0.bottom/0.0.1680.1050@0.0.1680.1050" timestamp="1603414975222" />
+    <state width="1638" height="726" key="GridCell.Tab.0.center" timestamp="1603414975221">
+      <screen x="0" y="0" width="1680" height="1050" />
+    </state>
+    <state width="1638" height="726" key="GridCell.Tab.0.center/0.0.1680.1050@0.0.1680.1050" timestamp="1603414975221" />
+    <state width="1638" height="726" key="GridCell.Tab.0.left" timestamp="1603414975220">
+      <screen x="0" y="0" width="1680" height="1050" />
+    </state>
+    <state width="1638" height="726" key="GridCell.Tab.0.left/0.0.1680.1050@0.0.1680.1050" timestamp="1603414975220" />
+    <state width="1638" height="726" key="GridCell.Tab.0.right" timestamp="1603414975222">
+      <screen x="0" y="0" width="1680" height="1050" />
+    </state>
+    <state width="1638" height="726" key="GridCell.Tab.0.right/0.0.1680.1050@0.0.1680.1050" timestamp="1603414975222" />
+    <state width="1638" height="364" key="GridCell.Tab.1.bottom" timestamp="1602635199735">
+      <screen x="0" y="0" width="1680" height="1050" />
+    </state>
+    <state width="1638" height="364" key="GridCell.Tab.1.bottom/0.0.1680.1050@0.0.1680.1050" timestamp="1602635199735" />
+    <state width="1638" height="364" key="GridCell.Tab.1.center" timestamp="1602635199734">
+      <screen x="0" y="0" width="1680" height="1050" />
+    </state>
+    <state width="1638" height="364" key="GridCell.Tab.1.center/0.0.1680.1050@0.0.1680.1050" timestamp="1602635199734" />
+    <state width="1638" height="364" key="GridCell.Tab.1.left" timestamp="1602635199734">
+      <screen x="0" y="0" width="1680" height="1050" />
+    </state>
+    <state width="1638" height="364" key="GridCell.Tab.1.left/0.0.1680.1050@0.0.1680.1050" timestamp="1602635199734" />
+    <state width="1638" height="364" key="GridCell.Tab.1.right" timestamp="1602635199734">
+      <screen x="0" y="0" width="1680" height="1050" />
+    </state>
+    <state width="1638" height="364" key="GridCell.Tab.1.right/0.0.1680.1050@0.0.1680.1050" timestamp="1602635199734" />
+    <state x="349" y="161" key="SettingsEditor" timestamp="1601601294827">
+      <screen x="0" y="0" width="1680" height="1050" />
+    </state>
+    <state x="349" y="161" key="SettingsEditor/0.0.1680.1050@0.0.1680.1050" timestamp="1601601294827" />
+    <state x="541" y="157" width="656" height="735" key="find.popup" timestamp="1602744027502">
+      <screen x="0" y="0" width="1680" height="1050" />
+    </state>
+    <state x="541" y="157" width="656" height="735" key="find.popup/0.0.1680.1050@0.0.1680.1050" timestamp="1602744027502" />
+    <state x="505" y="233" width="670" height="676" key="search.everywhere.popup" timestamp="1602989494977">
+      <screen x="0" y="0" width="1680" height="1050" />
+    </state>
+    <state x="505" y="233" width="670" height="676" key="search.everywhere.popup/0.0.1680.1050@0.0.1680.1050" timestamp="1602989494977" />
+  </component>
+</project>

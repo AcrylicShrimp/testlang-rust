@@ -56,14 +56,14 @@ pub struct FuncGen<'ctx> {
     pub prototype: FuncPrototype<'ctx>,
     pub scope_stack: Vec<ScopeGen<'ctx>>,
     pub loop_label_stack: Vec<(String, usize)>,
-    pub loop_statement_entry_stack: Vec<BasicBlock>,
-    pub loop_statement_exit_stack: Vec<BasicBlock>,
+    pub loop_statement_entry_stack: Vec<BasicBlock<'ctx>>,
+    pub loop_statement_exit_stack: Vec<BasicBlock<'ctx>>,
     pub loop_statement_scopesize_stack: Vec<usize>,
     pub last_block: BlockGen<'ctx>,
 }
 
 pub struct BlockGen<'ctx> {
-    pub block: BasicBlock,
+    pub block: BasicBlock<'ctx>,
     pub builder: Builder<'ctx>,
 }
 
@@ -359,7 +359,7 @@ impl<'ctx> BlockGen<'ctx> {
     pub fn new(context: &'ctx Context, function: FunctionValue<'ctx>, name: &str) -> Self {
         let block = context.append_basic_block(function, name);
         let builder = context.create_builder();
-        builder.position_at_end(&block);
+        builder.position_at_end(block);
 
         BlockGen {
             block: block,
@@ -367,22 +367,22 @@ impl<'ctx> BlockGen<'ctx> {
         }
     }
 
-    pub fn from(context: &'ctx Context, block: BasicBlock) -> Self {
+    pub fn from(context: &'ctx Context, block: BasicBlock<'ctx>) -> Self {
         let builder = context.create_builder();
-        builder.position_at_end(&block);
+        builder.position_at_end(block);
         BlockGen {
-            block: block,
+            block,
             builder: builder,
         }
     }
 
     pub fn connect_to(&self, to: &Self) {
-        self.builder.build_unconditional_branch(&to.block);
+        self.builder.build_unconditional_branch(to.block);
     }
 
     pub fn connect_to_if(&self, criteria: IntValue<'ctx>, to_then: &Self, to_else: &Self) {
         self.builder
-            .build_conditional_branch(criteria, &to_then.block, &to_else.block);
+            .build_conditional_branch(criteria, to_then.block, to_else.block);
     }
 }
 
@@ -1755,8 +1755,8 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
         }
 
         let result = end_block.builder.build_phi(context.bool_type(), "OR");
-        result.add_incoming(&[(&context.bool_type().const_int(1, false), &lhs_block)]);
-        result.add_incoming(&[(&rhs.to_basic_value(), &self.last_block.block)]);
+        result.add_incoming(&[(&context.bool_type().const_int(1, false), lhs_block)]);
+        result.add_incoming(&[(&rhs.to_basic_value(), self.last_block.block)]);
 
         Value::from_basic_value(ValueType::Bool, result.as_basic_value())
     }
@@ -1788,8 +1788,8 @@ impl<'fnc, 'mdl: 'fnc, 'ctx: 'mdl> FuncGen<'ctx> {
         }
 
         let result = end_block.builder.build_phi(context.bool_type(), "AND");
-        result.add_incoming(&[(&context.bool_type().const_int(0, false), &lhs_block)]);
-        result.add_incoming(&[(&rhs.to_basic_value(), &self.last_block.block)]);
+        result.add_incoming(&[(&context.bool_type().const_int(0, false), lhs_block)]);
+        result.add_incoming(&[(&rhs.to_basic_value(), self.last_block.block)]);
 
         Value::from_basic_value(ValueType::Bool, result.as_basic_value())
     }

@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod type_inference;
 pub mod typed_ir;
 pub mod untyped_ir;
 // pub mod astElem;

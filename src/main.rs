@@ -70,7 +70,7 @@ fn do_gen_ast(content: String) {
             match ast {
                 Ok(ast) => {
                     let result = untyped_ir::from_ast(&from_raw_ast(&ast));
-                    typed_ir::test(&result.0, &result.1);
+                    let typed_results = typed_ir::from_untyped_ir(&result.0, &result.1);
                 }
                 Err(err) => println!("{}", err),
             };
