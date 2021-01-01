@@ -72,22 +72,30 @@ func-def-statement-param-list: Id @type;
 func-def-statement-param-list: @func-def-statement-param-list Comma Id;
 func-def-statement-param-list: @func-def-statement-param-list Comma Id @type;
 
-type: KeywordVoid;
-type: KeywordBool;
-type: KeywordI8;
-type: KeywordI16;
-type: KeywordI32;
-type: KeywordI64;
-type: KeywordI128;
-type: KeywordU8;
-type: KeywordU16;
-type: KeywordU32;
-type: KeywordU64;
-type: KeywordU128;
-type: KeywordF16;
-type: KeywordF32;
-type: KeywordF64;
-type: KeywordStr;
+type: @refer-type;
+type: KeywordRef @refer-type;
+
+refer-type: @primitive-type;
+refer-type: Id;
+
+type-list: @type;
+type-list: @type-list Comma @type;
+
+primitive-type: KeywordBool;
+primitive-type: KeywordI8;
+primitive-type: KeywordI16;
+primitive-type: KeywordI32;
+primitive-type: KeywordI64;
+primitive-type: KeywordI128;
+primitive-type: KeywordU8;
+primitive-type: KeywordU16;
+primitive-type: KeywordU32;
+primitive-type: KeywordU64;
+primitive-type: KeywordU128;
+primitive-type: KeywordF16;
+primitive-type: KeywordF32;
+primitive-type: KeywordF64;
+primitive-type: KeywordStr;
 
 path: Id;
 path: @path Dot Id;

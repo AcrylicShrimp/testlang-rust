@@ -1,50 +1,177 @@
 use std::collections::{HashMap, HashSet};
 
-// Operation identifier, means that its name or a operator type.
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub enum OperationId {
-	Op_Add,
+pub enum FunctionId {
 	Named(String),
 }
 
-// Operation, function or method that can be executed.
-// Basically operations are functions.
-pub struct Operation {
-	id: OperationId,
-	return_type: u64,
-	parameter_type: Vec<u64>,
+pub struct Function {
+	pub id: FunctionId,
+	pub return_type: usize,
+	pub parameter_type: Vec<usize>,
 }
 
-// Implementations of operations.
-pub trait OperationImplementation {
-	// TODO: Correct this function.
-	fn emit_code(&self);
+pub struct Trait {
+	pub index: usize,
+	pub name: String,
+	pub functions: HashMap<FunctionId, Function>,
 }
 
-// Real, fully instantiated known types.
-// NOTE: Types are fully instantiated, so they must provide implementations.
-pub struct Type {
-	name: String,
-	operations: HashMap<OperationId, (Operation, Box<dyn OperationImplementation>)>,
+pub struct Struct {
+	pub index: usize,
+	pub name: String,
+	pub fields: HashMap<String, usize>,
+	pub functions: HashMap<FunctionId, Function>,
+	pub implementations: Vec<Trait>,
 }
 
-// Abstract, (maybe) partially known types.
-pub struct AbstractType {
-	id: usize,
-	operations: HashMap<OperationId, Operation>,
+pub enum Type {
+	Trait(Trait),
+	Struct(Struct),
 }
 
-// impl AbstractType {
-// 	pub fn make_superset_of(&mut self, type: &AbstractType) -> bool {
-
-// 	}
-// }
+pub enum AbstractType {
+	Trait(Vec<usize>),
+	Struct(usize),
+}
 
 pub struct TypeGraph {
-	types: Vec<Type>,
-	abstract_types: Vec<AbstractType>,
-	abstract_types_to_types: HashMap<usize, usize>,
-	abstract_types_to_abstract_types: HashMap<usize, HashSet<usize>>,
+	traits: Vec<Trait>,
+	structs: Vec<Struct>,
+	trait_names: HashMap<String, usize>,
+	struct_names: HashMap<String, usize>,
+	next_abstract_type: usize,
+	abstract_types_to_types: Vec<Option<AbstractType>>,
+	abstract_types_to_abstract_types: Vec<HashSet<usize>>,
+}
+
+impl TypeGraph {
+	pub fn new(mut traits: Vec<Trait>, mut structs: Vec<Struct>) -> TypeGraph {
+		for index in 0..traits.len() {
+			traits[index].index = index;
+		}
+
+		for index in 0..structs.len() {
+			structs[index].index = index;
+		}
+
+		let mut trait_names = HashMap::new();
+		let mut struct_names = HashMap::new();
+
+		for r#trait in &traits {
+			trait_names.insert(r#trait.name.clone(), r#trait.index);
+		}
+
+		for r#struct in &structs {
+			struct_names.insert(r#struct.name.clone(), r#struct.index);
+		}
+
+		TypeGraph {
+			traits,
+			structs,
+			trait_names,
+			struct_names,
+			next_abstract_type: 0,
+			abstract_types_to_types: Vec::new(),
+			abstract_types_to_abstract_types: Vec::new(),
+		}
+	}
+
+	pub fn trait_by_name(&self, name: &str) -> Option<&Trait> {
+		self.trait_names.get(name).map(|&index| &self.traits[index])
+	}
+	pub fn struct_by_name(&self, name: &str) -> Option<&Struct> {
+		self.struct_names
+			.get(name)
+			.map(|&index| &self.structs[index])
+	}
+
+	pub fn new_abstract_type(&mut self) -> usize {
+		let abstract_type = self.next_abstract_type;
+		self.next_abstract_type += 1;
+		self.abstract_types_to_types.push(None);
+		self.abstract_types_to_abstract_types.push(HashSet::new());
+		abstract_type
+	}
+
+	pub fn specify_abstract_type_as_trait(
+		&mut self,
+		abstract_type: usize,
+		r#trait: usize,
+	) -> Result<(), ()> {
+		match &mut self.abstract_types_to_types[abstract_type] {
+			Some(r#type) => match r#type {
+				AbstractType::Trait(abstract_type_traits) => {
+					for &trait_index in abstract_type_traits.iter() {
+						if trait_index == r#trait {
+							return Ok(());
+						}
+					}
+
+					abstract_type_traits.push(r#trait);
+					Ok(())
+				}
+				&mut AbstractType::Struct(abstract_type_struct) => {
+					for implemented_trait in &self.structs[abstract_type_struct].implementations {
+						if implemented_trait.index == r#trait {
+							return Ok(());
+						}
+					}
+
+					Err(())
+				}
+			},
+			None => {
+				self.abstract_types_to_types[abstract_type] =
+					Some(AbstractType::Trait(vec![r#trait]));
+				Ok(())
+			}
+		}
+	}
+
+	pub fn specify_abstract_type_as_struct(
+		&mut self,
+		abstract_type: usize,
+		r#struct: usize,
+	) -> Result<(), ()> {
+		match &mut self.abstract_types_to_types[abstract_type] {
+			Some(r#type) => match r#type {
+				AbstractType::Trait(abstract_type_traits) => {
+					'trait_loop: for &r#trait in abstract_type_traits.iter() {
+						for implemented_trait in &self.structs[r#struct].implementations {
+							if implemented_trait.index == r#trait {
+								continue 'trait_loop;
+							}
+						}
+
+						return Err(());
+					}
+
+					*r#type = AbstractType::Struct(r#struct);
+					Ok(())
+				}
+				&mut AbstractType::Struct(abstract_type_struct) => {
+					if abstract_type_struct == r#struct {
+						Ok(())
+					} else {
+						Err(())
+					}
+				}
+			},
+			None => {
+				self.abstract_types_to_types[abstract_type] = Some(AbstractType::Struct(r#struct));
+				Ok(())
+			}
+		}
+	}
+
+	pub fn specify_sub_type(&mut self, super_type: usize, sub_type: usize) {
+		self.abstract_types_to_abstract_types[super_type].insert(sub_type);
+	}
+
+	pub fn resolve_types(mut self) -> Result<(), ()> {
+		Ok(())
+	}
 }
 
 // impl AbstractType {
